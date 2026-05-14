@@ -1,8 +1,8 @@
 # SurveyHub-MCP
 
-一个基于 `FastMCP` 的网络空间测绘 MCP Server，支持 FOFA、360 Quake、Hunter（奇安信鹰图）和 ZoomEye。
+基于 `FastMCP` 编写的网络空间测绘 MCP Server，聚合查询 FOFA、Quake、Hunter、ZoomEye。
 
-项目使用 `uv` 管理本地 Python 环境，适合在 Claude Desktop、Cursor、Cherry Studio 等支持 MCP 的客户端中使用。
+适合在 Claude Desktop、Cursor、Cherry Studio 等支持 MCP 的客户端中使用。
 
 ## 支持平台
 
