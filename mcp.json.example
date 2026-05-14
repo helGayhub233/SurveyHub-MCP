@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "surveyhub": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "/absolute/path/to/SurveyHub-MCP",
+        "run",
+        "surveyhub-mcp"
+      ],
+      "env": {
+        "FOFA_KEY": "your_fofa_key",
+        "FOFA_EMAIL": "optional_fofa_email",
+        "QUAKE_KEY": "your_quake_key",
+        "ZOOMEYE_API_KEY": "your_zoomeye_api_key",
+        "HUNTER_KEY": "fallback_hunter_key",
+        "HUNTER_PERSONAL_KEY": "your_hunter_personal_key",
+        "HUNTER_ENTERPRISE_KEY": "your_hunter_enterprise_key"
+      }
+    }
+  }
+}
