@@ -8,7 +8,7 @@ from typing import Annotated, Literal
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
-from .common import encode_base64, missing_env_message, request_json
+from .common import encode_base64, missing_env_message, platform_key, request_json
 
 ZOOMEYE_BASE_URL = "https://api.zoomeye.org"
 ZOOMEYE_KEY_URL = "https://www.zoomeye.org -> Profile -> API Key"
@@ -17,7 +17,7 @@ ZOOMEYE_FACETS = "country, subdivisions, city, product, service, device, os, por
 
 
 def _zoomeye_key() -> str | None:
-    return os.getenv("ZOOMEYE_API_KEY")
+    return platform_key("ZOOMEYE_API_KEY")
 
 
 def _missing_key() -> str:

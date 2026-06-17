@@ -1,4 +1,4 @@
-"""Shared helpers for the FOFA, Quake, Hunter, and ZoomEye MCP tools."""
+"""Shared helpers for all SurveyHub-MCP platform tools."""
 
 from __future__ import annotations
 
@@ -13,6 +13,8 @@ from typing import Any
 import httpx
 
 DEFAULT_TIMEOUT = 30.0
+MAX_RETRIES = 3
+RETRY_BASE_DELAY = 2.0
 
 
 class AsyncRateLimiter:
@@ -71,6 +73,56 @@ def first_env(names: tuple[str, ...]) -> tuple[str | None, str | None]:
     """Return the first configured environment variable name and value."""
     for name in names:
         value = os.getenv(name)
+        if value:
+            return name, value
+    return None, None
+
+
+# ---------------------------------------------------------------------------
+# Region-prefixed env-var helpers (cn / us / pt / cy / fr / ae / kr)
+# ---------------------------------------------------------------------------
+
+PLATFORM_PREFIX: dict[str, str] = {
+    # cn: Chinese platforms
+    "FOFA_KEY": "CN",
+    "FOFA_EMAIL": "CN",
+    "QUAKE_KEY": "CN",
+    "ZOOMEYE_API_KEY": "CN",
+    "HUNTER_KEY": "CN",
+    "HUNTER_PERSONAL_KEY": "CN",
+    "HUNTER_ENTERPRISE_KEY": "CN",
+    "DAYDAYMAP_API_KEY": "CN",
+    # us: United States platforms
+    "SHODAN_API_KEY": "US",
+    "CENSYS_API_ID": "US",
+    "CENSYS_API_SECRET": "US",
+    "SECURITYTRAILS_API_KEY": "US",
+    # pt: Portugal platforms
+    "BINARYEDGE_API_KEY": "PT",
+    # cy: Cyprus platforms
+    "NETLAS_API_KEY": "CY",
+    # fr: France platforms
+    "ONYPHE_API_KEY": "FR",
+    "LEAKIX_API_KEY": "FR",
+    # ae: United Arab Emirates platforms
+    "FULLHUNT_API_KEY": "AE",
+    # kr: Korean platforms
+    "CRIMINALIP_API_KEY": "KR",
+}
+
+
+def platform_key(var_name: str) -> str | None:
+    """Read env var with region prefix: {PREFIX}_{VAR} only."""
+    prefix = PLATFORM_PREFIX.get(var_name)
+    if prefix:
+        return os.getenv(f"{prefix}_{var_name}")
+    return os.getenv(var_name)
+
+
+def platform_env(*var_names: str) -> tuple[str | None, str | None]:
+    """Like first_env but with region prefix for each name."""
+    for name in var_names:
+        value = platform_key(name)
         if value:
             return name, value
     return None, None
@@ -166,23 +218,38 @@ async def request_json(
     forbidden_hint: str,
     **kwargs: Any,
 ) -> str:
-    """Send an HTTP request and return a JSON or error text response."""
-    try:
-        async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
-            response = await client.request(method, url, **kwargs)
-            response.raise_for_status()
-            return render_response_body(response)
-    except httpx.HTTPStatusError as error:
-        return format_http_error(
-            platform=platform,
-            error=error,
-            auth_hint=auth_hint,
-            forbidden_hint=forbidden_hint,
-        )
-    except httpx.TimeoutException:
-        return f"Request timeout: {platform} API did not respond within {DEFAULT_TIMEOUT:.0f} seconds."
-    except Exception as error:
-        return f"Error querying {platform}: {type(error).__name__}: {error}"
+    """Send an HTTP request and return a JSON or error text response.
+
+    Automatically retries on HTTP 429 (rate-limit) with exponential backoff.
+    """
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+                response = await client.request(method, url, **kwargs)
+                response.raise_for_status()
+                return render_response_body(response)
+        except httpx.HTTPStatusError as error:
+            if error.response.status_code == 429 and attempt < MAX_RETRIES:
+                retry_after = error.response.headers.get("Retry-After")
+                if retry_after:
+                    try:
+                        delay = float(retry_after)
+                    except ValueError:
+                        delay = RETRY_BASE_DELAY ** attempt
+                else:
+                    delay = RETRY_BASE_DELAY ** attempt
+                await asyncio.sleep(delay)
+                continue
+            return format_http_error(
+                platform=platform,
+                error=error,
+                auth_hint=auth_hint,
+                forbidden_hint=forbidden_hint,
+            )
+        except httpx.TimeoutException:
+            return f"Request timeout: {platform} API did not respond within {DEFAULT_TIMEOUT:.0f} seconds."
+        except Exception as error:
+            return f"Error querying {platform}: {type(error).__name__}: {error}"
 
 
 async def request_download(
@@ -195,31 +262,46 @@ async def request_download(
     forbidden_hint: str,
     **kwargs: Any,
 ) -> str:
-    """Send an HTTP request and save the response body to a local file."""
-    try:
-        async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
-            response = await client.request(method, url, **kwargs)
-            response.raise_for_status()
+    """Send an HTTP request and save the response body to a local file.
 
-            content_type = response.headers.get("content-type", "")
-            if "json" in content_type.lower():
-                try:
-                    return render_json(response.json())
-                except ValueError:
-                    return response.text
+    Automatically retries on HTTP 429 (rate-limit) with exponential backoff.
+    """
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+                response = await client.request(method, url, **kwargs)
+                response.raise_for_status()
 
-            path = Path(output_path).expanduser()
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(response.content)
-            return f"Downloaded {len(response.content)} bytes from {platform} to {path}."
-    except httpx.HTTPStatusError as error:
-        return format_http_error(
-            platform=platform,
-            error=error,
-            auth_hint=auth_hint,
-            forbidden_hint=forbidden_hint,
-        )
-    except httpx.TimeoutException:
-        return f"Request timeout: {platform} API did not respond within {DEFAULT_TIMEOUT:.0f} seconds."
-    except Exception as error:
-        return f"Error downloading from {platform}: {type(error).__name__}: {error}"
+                content_type = response.headers.get("content-type", "")
+                if "json" in content_type.lower():
+                    try:
+                        return render_json(response.json())
+                    except ValueError:
+                        return response.text
+
+                path = Path(output_path).expanduser()
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(response.content)
+                return f"Downloaded {len(response.content)} bytes from {platform} to {path}."
+        except httpx.HTTPStatusError as error:
+            if error.response.status_code == 429 and attempt < MAX_RETRIES:
+                retry_after = error.response.headers.get("Retry-After")
+                if retry_after:
+                    try:
+                        delay = float(retry_after)
+                    except ValueError:
+                        delay = RETRY_BASE_DELAY ** attempt
+                else:
+                    delay = RETRY_BASE_DELAY ** attempt
+                await asyncio.sleep(delay)
+                continue
+            return format_http_error(
+                platform=platform,
+                error=error,
+                auth_hint=auth_hint,
+                forbidden_hint=forbidden_hint,
+            )
+        except httpx.TimeoutException:
+            return f"Request timeout: {platform} API did not respond within {DEFAULT_TIMEOUT:.0f} seconds."
+        except Exception as error:
+            return f"Error downloading from {platform}: {type(error).__name__}: {error}"

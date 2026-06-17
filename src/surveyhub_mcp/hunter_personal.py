@@ -10,8 +10,8 @@ from pydantic import Field
 
 from .common import (
     encode_base64_url,
-    first_env,
     missing_any_env_message,
+    platform_env,
     request_download,
     request_json,
 )
@@ -29,7 +29,7 @@ HUNTER_PERSONAL_FIELDS = (
 
 
 def _hunter_key() -> str | None:
-    return first_env(HUNTER_PERSONAL_ENV)[1]
+    return platform_env(*HUNTER_PERSONAL_ENV)[1]
 
 
 def _missing_key() -> str:

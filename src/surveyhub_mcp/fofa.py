@@ -9,7 +9,7 @@ from urllib.parse import quote
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
-from .common import AsyncRateLimiter, encode_base64, missing_env_message, request_json, split_csv
+from .common import AsyncRateLimiter, encode_base64, missing_env_message, platform_key, request_json, split_csv
 
 FOFA_BASE_URL = "https://fofa.info"
 FOFA_KEY_URL = "https://fofa.info -> Personal Center -> API Key"
@@ -31,10 +31,11 @@ FOFA_STATS_FIELDS = (
 )
 FOFA_STATS_RATE_LIMITER = AsyncRateLimiter(5.0)
 FOFA_HOST_RATE_LIMITER = AsyncRateLimiter(1.0)
+FOFA_SEARCH_RATE_LIMITER = AsyncRateLimiter(0.6)
 
 
 def _fofa_key() -> str | None:
-    return os.getenv("FOFA_KEY")
+    return platform_key("FOFA_KEY")
 
 
 def _missing_key() -> str:
@@ -51,7 +52,7 @@ def _add_fofa_auth(params: dict[str, str | int | bool]) -> dict[str, str | int |
     if key:
         params["key"] = key
 
-    email = os.getenv("FOFA_EMAIL")
+    email = platform_key("FOFA_EMAIL")
     if email:
         params["email"] = email
 
@@ -93,6 +94,8 @@ async def search_fofa(
         }
     )
 
+    await FOFA_SEARCH_RATE_LIMITER.wait()
+
     return await request_json(
         platform="FOFA",
         method="GET",
@@ -129,6 +132,8 @@ async def search_fofa_next(
     )
     if next_id:
         params["next"] = next_id
+
+    await FOFA_SEARCH_RATE_LIMITER.wait()
 
     return await request_json(
         platform="FOFA",
