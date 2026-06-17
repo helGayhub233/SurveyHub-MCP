@@ -2,6 +2,13 @@
 
 All notable changes to SurveyHub-MCP will be documented in this file.
 
+## [1.0.2] - 2026-06-17
+
+### Fixed
+
+- Add `AsyncRateLimiter` (0.6s) to `fofa_search` and `fofa_search_next` to comply with FOFA's recommended 2 requests/second rate limit.
+- Add HTTP 429 automatic retry with exponential backoff (max 3 retries) to `request_json` and `request_download` to handle rate-limit errors gracefully.
+
 ## [1.0.1] - 2026-05-14
 
 ### Changed

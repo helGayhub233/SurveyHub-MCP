@@ -13,6 +13,8 @@ from typing import Any
 import httpx
 
 DEFAULT_TIMEOUT = 30.0
+MAX_RETRIES = 3
+RETRY_BASE_DELAY = 2.0
 
 
 class AsyncRateLimiter:
@@ -166,23 +168,38 @@ async def request_json(
     forbidden_hint: str,
     **kwargs: Any,
 ) -> str:
-    """Send an HTTP request and return a JSON or error text response."""
-    try:
-        async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
-            response = await client.request(method, url, **kwargs)
-            response.raise_for_status()
-            return render_response_body(response)
-    except httpx.HTTPStatusError as error:
-        return format_http_error(
-            platform=platform,
-            error=error,
-            auth_hint=auth_hint,
-            forbidden_hint=forbidden_hint,
-        )
-    except httpx.TimeoutException:
-        return f"Request timeout: {platform} API did not respond within {DEFAULT_TIMEOUT:.0f} seconds."
-    except Exception as error:
-        return f"Error querying {platform}: {type(error).__name__}: {error}"
+    """Send an HTTP request and return a JSON or error text response.
+
+    Automatically retries on HTTP 429 (rate-limit) with exponential backoff.
+    """
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+                response = await client.request(method, url, **kwargs)
+                response.raise_for_status()
+                return render_response_body(response)
+        except httpx.HTTPStatusError as error:
+            if error.response.status_code == 429 and attempt < MAX_RETRIES:
+                retry_after = error.response.headers.get("Retry-After")
+                if retry_after:
+                    try:
+                        delay = float(retry_after)
+                    except ValueError:
+                        delay = RETRY_BASE_DELAY ** attempt
+                else:
+                    delay = RETRY_BASE_DELAY ** attempt
+                await asyncio.sleep(delay)
+                continue
+            return format_http_error(
+                platform=platform,
+                error=error,
+                auth_hint=auth_hint,
+                forbidden_hint=forbidden_hint,
+            )
+        except httpx.TimeoutException:
+            return f"Request timeout: {platform} API did not respond within {DEFAULT_TIMEOUT:.0f} seconds."
+        except Exception as error:
+            return f"Error querying {platform}: {type(error).__name__}: {error}"
 
 
 async def request_download(
@@ -195,31 +212,46 @@ async def request_download(
     forbidden_hint: str,
     **kwargs: Any,
 ) -> str:
-    """Send an HTTP request and save the response body to a local file."""
-    try:
-        async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
-            response = await client.request(method, url, **kwargs)
-            response.raise_for_status()
+    """Send an HTTP request and save the response body to a local file.
 
-            content_type = response.headers.get("content-type", "")
-            if "json" in content_type.lower():
-                try:
-                    return render_json(response.json())
-                except ValueError:
-                    return response.text
+    Automatically retries on HTTP 429 (rate-limit) with exponential backoff.
+    """
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+                response = await client.request(method, url, **kwargs)
+                response.raise_for_status()
 
-            path = Path(output_path).expanduser()
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(response.content)
-            return f"Downloaded {len(response.content)} bytes from {platform} to {path}."
-    except httpx.HTTPStatusError as error:
-        return format_http_error(
-            platform=platform,
-            error=error,
-            auth_hint=auth_hint,
-            forbidden_hint=forbidden_hint,
-        )
-    except httpx.TimeoutException:
-        return f"Request timeout: {platform} API did not respond within {DEFAULT_TIMEOUT:.0f} seconds."
-    except Exception as error:
-        return f"Error downloading from {platform}: {type(error).__name__}: {error}"
+                content_type = response.headers.get("content-type", "")
+                if "json" in content_type.lower():
+                    try:
+                        return render_json(response.json())
+                    except ValueError:
+                        return response.text
+
+                path = Path(output_path).expanduser()
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(response.content)
+                return f"Downloaded {len(response.content)} bytes from {platform} to {path}."
+        except httpx.HTTPStatusError as error:
+            if error.response.status_code == 429 and attempt < MAX_RETRIES:
+                retry_after = error.response.headers.get("Retry-After")
+                if retry_after:
+                    try:
+                        delay = float(retry_after)
+                    except ValueError:
+                        delay = RETRY_BASE_DELAY ** attempt
+                else:
+                    delay = RETRY_BASE_DELAY ** attempt
+                await asyncio.sleep(delay)
+                continue
+            return format_http_error(
+                platform=platform,
+                error=error,
+                auth_hint=auth_hint,
+                forbidden_hint=forbidden_hint,
+            )
+        except httpx.TimeoutException:
+            return f"Request timeout: {platform} API did not respond within {DEFAULT_TIMEOUT:.0f} seconds."
+        except Exception as error:
+            return f"Error downloading from {platform}: {type(error).__name__}: {error}"

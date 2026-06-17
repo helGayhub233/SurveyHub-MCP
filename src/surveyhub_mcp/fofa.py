@@ -31,6 +31,7 @@ FOFA_STATS_FIELDS = (
 )
 FOFA_STATS_RATE_LIMITER = AsyncRateLimiter(5.0)
 FOFA_HOST_RATE_LIMITER = AsyncRateLimiter(1.0)
+FOFA_SEARCH_RATE_LIMITER = AsyncRateLimiter(0.6)
 
 
 def _fofa_key() -> str | None:
@@ -93,6 +94,8 @@ async def search_fofa(
         }
     )
 
+    await FOFA_SEARCH_RATE_LIMITER.wait()
+
     return await request_json(
         platform="FOFA",
         method="GET",
@@ -129,6 +132,8 @@ async def search_fofa_next(
     )
     if next_id:
         params["next"] = next_id
+
+    await FOFA_SEARCH_RATE_LIMITER.wait()
 
     return await request_json(
         platform="FOFA",
