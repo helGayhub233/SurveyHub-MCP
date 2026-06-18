@@ -2,6 +2,16 @@
 
 All notable changes to SurveyHub-MCP will be documented in this file.
 
+## [1.1.0] - 2026-06-17
+
+### Added
+
+- Added DayDayMap platform support with asset search via `/api/v1/raymap/search/all`.
+- Added `daydaymap_search` tool with Base64 keyword encoding and application-level error code handling.
+- Added `daydaymap-mcp` single-platform entry point.
+- Added DayDayMap API documentation at `docs/api/daydaymap_api.md`.
+- Added `DAYDAYMAP_API_KEY` environment variable.
+
 ## [1.0.2] - 2026-06-17
 
 ### Fixed

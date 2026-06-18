@@ -15,7 +15,8 @@
         "ZOOMEYE_API_KEY": "your_zoomeye_api_key",
         "HUNTER_KEY": "fallback_hunter_key",
         "HUNTER_PERSONAL_KEY": "your_hunter_personal_key",
-        "HUNTER_ENTERPRISE_KEY": "your_hunter_enterprise_key"
+        "HUNTER_ENTERPRISE_KEY": "your_hunter_enterprise_key",
+        "DAYDAYMAP_API_KEY": "your_daydaymap_api_key"
       }
     }
   }
