@@ -6,23 +6,56 @@ All notable changes to SurveyHub-MCP will be documented in this file.
 
 ### Added
 
-- Added SecurityTrails platform support with 2 tools: `securitytrails_domain`, `securitytrails_subdomains`.
-- Added BinaryEdge platform support with 3 tools: `binaryedge_search`, `binaryedge_subdomains`, `binaryedge_account`.
-- Added Netlas platform support with 3 tools: `netlas_search`, `netlas_domain`, `netlas_account`.
-- Added Onyphe platform support with 4 tools: `onyphe_search`, `onyphe_summary_ip`, `onyphe_summary_domain`, `onyphe_account`.
-- Added LeakIX platform support with 4 tools: `leakix_search`, `leakix_host`, `leakix_subdomains`, `leakix_plugins`.
-- Added FullHunt platform support with 4 tools: `fullhunt_domain`, `fullhunt_subdomains`, `fullhunt_host`, `fullhunt_account`.
 - Added Criminal IP platform support with 4 tools: `criminalip_ip`, `criminalip_search`, `criminalip_domain`, `criminalip_account`.
 
 ### Changed
 
-- Renamed environment variable prefix for BinaryEdge from `ES_` to `PT_`.
 - Merged per-platform tool tables in README into a single unified 61-tool overview table with platform column.
 
 ### Removed
 
 - Removed `securitytrails_ip` (IP WHOIS) and `securitytrails_dns_history` (DNS history) — IP attribution and historical DNS records are intelligence-class data, not asset discovery.
 - Removed `netlas_whois_ip` (IP WHOIS) — IP attribution is intelligence-class data, not asset discovery.
+
+## [1.9.0] - 2026-06-17
+
+### Added
+
+- Added FullHunt platform support with 4 tools: `fullhunt_domain`, `fullhunt_subdomains`, `fullhunt_host`, `fullhunt_account`.
+
+## [1.8.0] - 2026-06-17
+
+### Added
+
+- Added LeakIX platform support with 4 tools: `leakix_search`, `leakix_host`, `leakix_subdomains`, `leakix_plugins`.
+
+## [1.7.0] - 2026-06-17
+
+### Added
+
+- Added Onyphe platform support with 4 tools: `onyphe_search`, `onyphe_summary_ip`, `onyphe_summary_domain`, `onyphe_account`.
+
+## [1.6.0] - 2026-06-17
+
+### Added
+
+- Added Netlas platform support with 3 tools: `netlas_search`, `netlas_domain`, `netlas_account`.
+
+## [1.5.0] - 2026-06-17
+
+### Added
+
+- Added BinaryEdge platform support with 3 tools: `binaryedge_search`, `binaryedge_subdomains`, `binaryedge_account`.
+
+### Changed
+
+- Renamed environment variable prefix for BinaryEdge from `ES_` to `PT_`.
+
+## [1.4.0] - 2026-06-17
+
+### Added
+
+- Added SecurityTrails platform support with 2 tools: `securitytrails_domain`, `securitytrails_subdomains`.
 
 ## [1.3.0] - 2026-06-17
 
