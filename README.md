@@ -2,7 +2,7 @@
 
 基于 `FastMCP` 编写的网络空间测绘 MCP Server，聚合查询 FOFA、Quake、Hunter、ZoomEye、DayDayMap。
 
-适合在 Claude Desktop、Cursor、Cherry Studio 等支持 MCP 的客户端中使用。
+适合在 Claude Desktop、Cursor、Codex 程序中作为 MCP 连接器使用。
 
 ## 支持平台
 
