@@ -2,7 +2,6 @@
 
 来源：
 
-- `https://www.zoomeye.org/`
 - `https://www.zoomeye.org/doc`
 - 本地参考：`zoomeye/server.py`、`zoomeye/prompts.py`
 

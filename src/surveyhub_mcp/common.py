@@ -1,4 +1,4 @@
-"""Shared helpers for the FOFA, Quake, Hunter, and ZoomEye MCP tools."""
+"""Shared helpers for all SurveyHub-MCP platform tools."""
 
 from __future__ import annotations
 
@@ -73,6 +73,56 @@ def first_env(names: tuple[str, ...]) -> tuple[str | None, str | None]:
     """Return the first configured environment variable name and value."""
     for name in names:
         value = os.getenv(name)
+        if value:
+            return name, value
+    return None, None
+
+
+# ---------------------------------------------------------------------------
+# Region-prefixed env-var helpers (cn / us / pt / cy / fr / ae / kr)
+# ---------------------------------------------------------------------------
+
+PLATFORM_PREFIX: dict[str, str] = {
+    # cn: Chinese platforms
+    "FOFA_KEY": "CN",
+    "FOFA_EMAIL": "CN",
+    "QUAKE_KEY": "CN",
+    "ZOOMEYE_API_KEY": "CN",
+    "HUNTER_KEY": "CN",
+    "HUNTER_PERSONAL_KEY": "CN",
+    "HUNTER_ENTERPRISE_KEY": "CN",
+    "DAYDAYMAP_API_KEY": "CN",
+    # us: United States platforms
+    "SHODAN_API_KEY": "US",
+    "CENSYS_API_ID": "US",
+    "CENSYS_API_SECRET": "US",
+    "SECURITYTRAILS_API_KEY": "US",
+    # pt: Portugal platforms
+    "BINARYEDGE_API_KEY": "PT",
+    # cy: Cyprus platforms
+    "NETLAS_API_KEY": "CY",
+    # fr: France platforms
+    "ONYPHE_API_KEY": "FR",
+    "LEAKIX_API_KEY": "FR",
+    # ae: United Arab Emirates platforms
+    "FULLHUNT_API_KEY": "AE",
+    # kr: Korean platforms
+    "CRIMINALIP_API_KEY": "KR",
+}
+
+
+def platform_key(var_name: str) -> str | None:
+    """Read env var with region prefix: {PREFIX}_{VAR} only."""
+    prefix = PLATFORM_PREFIX.get(var_name)
+    if prefix:
+        return os.getenv(f"{prefix}_{var_name}")
+    return os.getenv(var_name)
+
+
+def platform_env(*var_names: str) -> tuple[str | None, str | None]:
+    """Like first_env but with region prefix for each name."""
+    for name in var_names:
+        value = platform_key(name)
         if value:
             return name, value
     return None, None

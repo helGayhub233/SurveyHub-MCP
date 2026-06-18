@@ -8,7 +8,7 @@ from typing import Annotated
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
-from .common import missing_env_message, request_json, split_csv
+from .common import missing_env_message, platform_key, request_json, split_csv
 
 QUAKE_BASE_URL = "https://quake.360.net"
 QUAKE_KEY_URL = "https://quake.360.net -> Personal Center -> Key Management"
@@ -39,7 +39,7 @@ QUAKE_AGGREGATION_FIELDS = (
 
 
 def _quake_key() -> str | None:
-    return os.getenv("QUAKE_KEY")
+    return platform_key("QUAKE_KEY")
 
 
 def _missing_key() -> str:

@@ -9,7 +9,7 @@ from urllib.parse import quote
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
-from .common import AsyncRateLimiter, encode_base64, missing_env_message, request_json, split_csv
+from .common import AsyncRateLimiter, encode_base64, missing_env_message, platform_key, request_json, split_csv
 
 FOFA_BASE_URL = "https://fofa.info"
 FOFA_KEY_URL = "https://fofa.info -> Personal Center -> API Key"
@@ -35,7 +35,7 @@ FOFA_SEARCH_RATE_LIMITER = AsyncRateLimiter(0.6)
 
 
 def _fofa_key() -> str | None:
-    return os.getenv("FOFA_KEY")
+    return platform_key("FOFA_KEY")
 
 
 def _missing_key() -> str:
@@ -52,7 +52,7 @@ def _add_fofa_auth(params: dict[str, str | int | bool]) -> dict[str, str | int |
     if key:
         params["key"] = key
 
-    email = os.getenv("FOFA_EMAIL")
+    email = platform_key("FOFA_EMAIL")
     if email:
         params["email"] = email
 

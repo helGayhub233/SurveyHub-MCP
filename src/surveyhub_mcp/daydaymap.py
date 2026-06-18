@@ -9,7 +9,7 @@ from typing import Annotated
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
-from .common import encode_base64, missing_env_message, request_json
+from .common import encode_base64, missing_env_message, platform_key, request_json
 
 DAYDAYMAP_BASE_URL = "https://www.daydaymap.com"
 DAYDAYMAP_KEY_URL = "https://www.daydaymap.com -> 个人中心 -> 个人信息 -> 复制 API KEY"
@@ -47,7 +47,7 @@ DAYDAYMAP_ERROR_CODES = {
 
 
 def _daydaymap_key() -> str | None:
-    return os.getenv("DAYDAYMAP_API_KEY")
+    return platform_key("DAYDAYMAP_API_KEY")
 
 
 def _missing_key() -> str:

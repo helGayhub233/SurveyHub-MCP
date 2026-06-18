@@ -2,6 +2,54 @@
 
 All notable changes to SurveyHub-MCP will be documented in this file.
 
+## [1.10.0] - 2026-06-17
+
+### Added
+
+- Added SecurityTrails platform support with 2 tools: `securitytrails_domain`, `securitytrails_subdomains`.
+- Added BinaryEdge platform support with 3 tools: `binaryedge_search`, `binaryedge_subdomains`, `binaryedge_account`.
+- Added Netlas platform support with 3 tools: `netlas_search`, `netlas_domain`, `netlas_account`.
+- Added Onyphe platform support with 4 tools: `onyphe_search`, `onyphe_summary_ip`, `onyphe_summary_domain`, `onyphe_account`.
+- Added LeakIX platform support with 4 tools: `leakix_search`, `leakix_host`, `leakix_subdomains`, `leakix_plugins`.
+- Added FullHunt platform support with 4 tools: `fullhunt_domain`, `fullhunt_subdomains`, `fullhunt_host`, `fullhunt_account`.
+- Added Criminal IP platform support with 4 tools: `criminalip_ip`, `criminalip_search`, `criminalip_domain`, `criminalip_account`.
+
+### Changed
+
+- Renamed environment variable prefix for BinaryEdge from `ES_` to `PT_`.
+- Merged per-platform tool tables in README into a single unified 61-tool overview table with platform column.
+
+### Removed
+
+- Removed `securitytrails_ip` (IP WHOIS) and `securitytrails_dns_history` (DNS history) — IP attribution and historical DNS records are intelligence-class data, not asset discovery.
+- Removed `netlas_whois_ip` (IP WHOIS) — IP attribution is intelligence-class data, not asset discovery.
+
+## [1.3.0] - 2026-06-17
+
+### Added
+
+- Added Censys platform support with 4 tools: `censys_search`, `censys_aggregate`, `censys_view_host`, `censys_account`.
+- Censys authentication uses HTTP Basic Auth with API ID + API Secret.
+- Added `censys-mcp` single-platform entry point.
+- Added Censys API documentation at `docs/api/censys_api.md`.
+- Added `US_CENSYS_API_ID` and `US_CENSYS_API_SECRET` environment variables.
+
+## [1.2.0] - 2026-06-17
+
+### Added
+
+- Added Shodan platform support with 7 tools: `shodan_search`, `shodan_search_count`, `shodan_host`, `shodan_api_info`, `shodan_domain`, `shodan_dns_resolve`, `shodan_dns_reverse`.
+- Added `shodan-mcp` single-platform entry point.
+- Added Shodan API documentation at `docs/api/shodan_api.md`.
+- Added `US_SHODAN_API_KEY` environment variable (with `SHODAN_API_KEY` fallback).
+
+### Changed
+
+- Refactored environment variable naming to region-based prefix convention (`CN_` / `US_` / `PT_` / `CY_` / `FR_` / `AE_` / `KR_`).
+- Added `platform_key()` and `platform_env()` helpers to `common.py` that try the prefixed env var first and fall back to the unprefixed name, ensuring backward compatibility.
+- All platform modules now use the new helpers instead of direct `os.getenv()` / `first_env()` calls.
+- Updated `.env.example`, `mcp.json.example`, and README to document the prefix convention and reserved international platform slots.
+
 ## [1.1.0] - 2026-06-17
 
 ### Added

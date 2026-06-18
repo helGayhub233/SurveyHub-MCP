@@ -9,14 +9,24 @@
         "surveyhub-mcp"
       ],
       "env": {
-        "FOFA_KEY": "your_fofa_key",
-        "FOFA_EMAIL": "optional_fofa_email",
-        "QUAKE_KEY": "your_quake_key",
-        "ZOOMEYE_API_KEY": "your_zoomeye_api_key",
-        "HUNTER_KEY": "fallback_hunter_key",
-        "HUNTER_PERSONAL_KEY": "your_hunter_personal_key",
-        "HUNTER_ENTERPRISE_KEY": "your_hunter_enterprise_key",
-        "DAYDAYMAP_API_KEY": "your_daydaymap_api_key"
+        "CN_FOFA_KEY": "your_fofa_key",
+        "CN_FOFA_EMAIL": "optional_fofa_email",
+        "CN_QUAKE_KEY": "your_quake_key",
+        "CN_ZOOMEYE_API_KEY": "your_zoomeye_api_key",
+        "CN_HUNTER_KEY": "fallback_hunter_key",
+        "CN_HUNTER_PERSONAL_KEY": "your_hunter_personal_key",
+        "CN_HUNTER_ENTERPRISE_KEY": "your_hunter_enterprise_key",
+        "CN_DAYDAYMAP_API_KEY": "your_daydaymap_api_key",
+        "US_SHODAN_API_KEY": "your_shodan_api_key",
+        "US_CENSYS_API_ID": "your_censys_api_id",
+        "US_CENSYS_API_SECRET": "your_censys_api_secret",
+        "US_SECURITYTRAILS_API_KEY": "your_securitytrails_api_key",
+        "PT_BINARYEDGE_API_KEY": "your_binaryedge_api_key",
+        "CY_NETLAS_API_KEY": "your_netlas_api_key",
+        "FR_ONYPHE_API_KEY": "your_onyphe_api_key",
+        "FR_LEAKIX_API_KEY": "your_leakix_api_key",
+        "AE_FULLHUNT_API_KEY": "your_fullhunt_api_key",
+        "KR_CRIMINALIP_API_KEY": "your_criminalip_api_key"
       }
     }
   }
