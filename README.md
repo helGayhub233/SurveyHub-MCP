@@ -1,6 +1,6 @@
 # SurveyHub-MCP
 
-基于 `FastMCP` 编写的网络空间测绘 MCP Server，聚合查询 FOFA、Quake、Hunter、ZoomEye、DayDayMap、Shodan、Censys、SecurityTrails、BinaryEdge、Netlas、Onyphe、LeakIX、FullHunt、Criminal IP。
+基于 `FastMCP` 编写的空间测绘 MCP Server，聚合查询 FOFA、Quake、Hunter、ZoomEye、DayDayMap等多个平台。
 
 适合在 Claude Desktop、Cursor、Codex 程序中作为 MCP 连接器使用。
 
