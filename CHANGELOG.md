@@ -2,7 +2,31 @@
 
 All notable changes to SurveyHub-MCP will be documented in this file.
 
-## [1.10.0] - 2026-06-17
+## [1.11.0] - 2026-06-25
+
+### Removed
+
+- Removed Shodan platform support (`shodan.py`, `shodan-mcp` entry point, `docs/api/shodan_api.md`).
+- Removed Censys platform support (`censys.py`, `censys-mcp` entry point, `docs/api/censys_api.md`).
+- Removed SecurityTrails platform support (`securitytrails.py`, `securitytrails-mcp` entry point, `docs/api/securitytrails_api.md`).
+- Removed BinaryEdge platform support (`binaryedge.py`, `binaryedge-mcp` entry point, `docs/api/binaryedge_api.md`).
+- Removed Netlas platform support (`netlas.py`, `netlas-mcp` entry point, `docs/api/netlas_api.md`).
+- Removed Onyphe platform support (`onyphe.py`, `onyphe-mcp` entry point, `docs/api/onyphe_api.md`).
+- Removed LeakIX platform support (`leakix.py`, `leakix-mcp` entry point, `docs/api/leakix_api.md`).
+- Removed FullHunt platform support (`fullhunt.py`, `fullhunt-mcp` entry point, `docs/api/fullhunt_api.md`).
+- Removed Criminal IP platform support (`criminalip.py`, `criminalip-mcp` entry point, `docs/api/criminalip_api.md`).
+- Removed all non-CN region prefixes (US_, PT_, CY_, FR_, AE_, KR_) from `PLATFORM_PREFIX`, `.env.example`, `mcp.json.example`, and README — project now focuses exclusively on Chinese cyberspace mapping platforms.
+
+### Added
+
+- Added `AsyncRateLimiter` (1 req/s) to Quake tools to prevent HTTP 429 rate-limit errors.
+- Added `AsyncRateLimiter` (1 req/s) to Hunter Personal tools to prevent HTTP 429 rate-limit errors.
+- Added `AsyncRateLimiter` (1 req/s) to Hunter Enterprise tools to prevent HTTP 429 rate-limit errors.
+
+### Changed
+
+- README simplified to reflect Chinese-platform-only focus.
+- `pyproject.toml` shortened description and keywords, removed 9 single-platform entry points.
 
 ### Added
 

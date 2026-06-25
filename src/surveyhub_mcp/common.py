@@ -79,7 +79,7 @@ def first_env(names: tuple[str, ...]) -> tuple[str | None, str | None]:
 
 
 # ---------------------------------------------------------------------------
-# Region-prefixed env-var helpers (cn / us / pt / cy / fr / ae / kr)
+# Region-prefixed env-var helpers (cn)
 # ---------------------------------------------------------------------------
 
 PLATFORM_PREFIX: dict[str, str] = {
@@ -92,22 +92,6 @@ PLATFORM_PREFIX: dict[str, str] = {
     "HUNTER_PERSONAL_KEY": "CN",
     "HUNTER_ENTERPRISE_KEY": "CN",
     "DAYDAYMAP_API_KEY": "CN",
-    # us: United States platforms
-    "SHODAN_API_KEY": "US",
-    "CENSYS_API_ID": "US",
-    "CENSYS_API_SECRET": "US",
-    "SECURITYTRAILS_API_KEY": "US",
-    # pt: Portugal platforms
-    "BINARYEDGE_API_KEY": "PT",
-    # cy: Cyprus platforms
-    "NETLAS_API_KEY": "CY",
-    # fr: France platforms
-    "ONYPHE_API_KEY": "FR",
-    "LEAKIX_API_KEY": "FR",
-    # ae: United Arab Emirates platforms
-    "FULLHUNT_API_KEY": "AE",
-    # kr: Korean platforms
-    "CRIMINALIP_API_KEY": "KR",
 }
 
 

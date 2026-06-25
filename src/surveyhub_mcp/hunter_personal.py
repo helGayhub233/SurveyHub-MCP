@@ -9,6 +9,7 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
 from .common import (
+    AsyncRateLimiter,
     encode_base64_url,
     missing_any_env_message,
     platform_env,
@@ -26,6 +27,8 @@ HUNTER_PERSONAL_FIELDS = (
     "province,city,is_web,isp,as_org,cert_sha256,ssl_certificate,"
     "component,asset_tag,updated_at,header,header_server,banner"
 )
+
+HP_RATE_LIMITER = AsyncRateLimiter(1.0)
 
 
 def _hunter_key() -> str | None:
@@ -99,6 +102,8 @@ async def search_hunter_personal(
         end_time=end_time,
     )
 
+    await HP_RATE_LIMITER.wait()
+
     return await request_json(
         platform="Hunter Personal",
         method="GET",
@@ -146,6 +151,7 @@ async def create_hunter_personal_batch_task(
         if not path.is_file():
             return f"File not found: {path}"
         with path.open("rb") as file_obj:
+            await HP_RATE_LIMITER.wait()
             return await request_json(
                 platform="Hunter Personal",
                 method="POST",
@@ -155,6 +161,8 @@ async def create_hunter_personal_batch_task(
                 auth_hint="Authentication failed. Check HUNTER_PERSONAL_KEY or HUNTER_KEY.",
                 forbidden_hint="Access forbidden. Your Hunter personal account may not have sufficient permissions or credits.",
             )
+
+    await HP_RATE_LIMITER.wait()
 
     return await request_json(
         platform="Hunter Personal",
@@ -171,6 +179,8 @@ async def get_hunter_personal_batch_status(*, task_id: str) -> str:
     if not _hunter_key():
         return _missing_key()
 
+    await HP_RATE_LIMITER.wait()
+
     return await request_json(
         platform="Hunter Personal",
         method="GET",
@@ -185,6 +195,8 @@ async def download_hunter_personal_batch_file(*, task_id: str, output_path: str)
     """Download Hunter personal batch export file."""
     if not _hunter_key():
         return _missing_key()
+
+    await HP_RATE_LIMITER.wait()
 
     return await request_download(
         platform="Hunter Personal",
@@ -201,6 +213,8 @@ async def get_hunter_personal_user_info() -> str:
     """Get Hunter personal account information."""
     if not _hunter_key():
         return _missing_key()
+
+    await HP_RATE_LIMITER.wait()
 
     return await request_json(
         platform="Hunter Personal",
