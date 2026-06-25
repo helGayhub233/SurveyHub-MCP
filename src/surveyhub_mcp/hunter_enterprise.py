@@ -102,12 +102,11 @@ async def search_hunter_enterprise(
         end_time=end_time,
     )
 
-    await HE_RATE_LIMITER.wait()
-
     return await request_json(
         platform="Hunter Enterprise",
         method="GET",
         url=f"{HUNTER_BASE_URL}/openApi/search",
+        rate_limiter=HE_RATE_LIMITER,
         params=params,
         auth_hint="Authentication failed. Check HUNTER_ENTERPRISE_KEY or HUNTER_KEY.",
         forbidden_hint="Access forbidden. Your Hunter enterprise account may not have sufficient permissions or credits.",
@@ -151,23 +150,22 @@ async def create_hunter_enterprise_batch_task(
         if not path.is_file():
             return f"File not found: {path}"
         with path.open("rb") as file_obj:
-            await HE_RATE_LIMITER.wait()
             return await request_json(
                 platform="Hunter Enterprise",
                 method="POST",
                 url=f"{HUNTER_BASE_URL}/openApi/search/batch",
+                rate_limiter=HE_RATE_LIMITER,
                 params=params,
                 files={"file": (path.name, file_obj, "text/csv")},
                 auth_hint="Authentication failed. Check HUNTER_ENTERPRISE_KEY or HUNTER_KEY.",
                 forbidden_hint="Access forbidden. Your Hunter enterprise account may not have sufficient permissions or credits.",
             )
 
-    await HE_RATE_LIMITER.wait()
-
     return await request_json(
         platform="Hunter Enterprise",
         method="POST",
         url=f"{HUNTER_BASE_URL}/openApi/search/batch",
+        rate_limiter=HE_RATE_LIMITER,
         params=params,
         auth_hint="Authentication failed. Check HUNTER_ENTERPRISE_KEY or HUNTER_KEY.",
         forbidden_hint="Access forbidden. Your Hunter enterprise account may not have sufficient permissions or credits.",
@@ -179,12 +177,11 @@ async def get_hunter_enterprise_batch_status(*, task_id: str) -> str:
     if not _hunter_key():
         return _missing_key()
 
-    await HE_RATE_LIMITER.wait()
-
     return await request_json(
         platform="Hunter Enterprise",
         method="GET",
         url=f"{HUNTER_BASE_URL}/openApi/search/batch/{task_id}",
+        rate_limiter=HE_RATE_LIMITER,
         params=_auth_params(),
         auth_hint="Authentication failed. Check HUNTER_ENTERPRISE_KEY or HUNTER_KEY.",
         forbidden_hint="Access forbidden. Your Hunter enterprise account may not have sufficient permissions or credits.",
@@ -196,13 +193,12 @@ async def download_hunter_enterprise_batch_file(*, task_id: str, output_path: st
     if not _hunter_key():
         return _missing_key()
 
-    await HE_RATE_LIMITER.wait()
-
     return await request_download(
         platform="Hunter Enterprise",
         method="GET",
         url=f"{HUNTER_BASE_URL}/openApi/search/download/{task_id}",
         output_path=output_path,
+        rate_limiter=HE_RATE_LIMITER,
         params=_auth_params(),
         auth_hint="Authentication failed. Check HUNTER_ENTERPRISE_KEY or HUNTER_KEY.",
         forbidden_hint="Access forbidden. Your Hunter enterprise account may not have sufficient permissions or credits.",
@@ -226,12 +222,11 @@ async def pull_hunter_enterprise_batch_results(
         "page_size": page_size,
     }
 
-    await HE_RATE_LIMITER.wait()
-
     return await request_json(
         platform="Hunter Enterprise",
         method="GET",
         url=f"{HUNTER_BASE_URL}/openApi/search/batch/pull",
+        rate_limiter=HE_RATE_LIMITER,
         params=params,
         auth_hint="Authentication failed. Check HUNTER_ENTERPRISE_KEY or HUNTER_KEY.",
         forbidden_hint="Access forbidden. Your Hunter enterprise account may not have sufficient permissions or credits.",
@@ -243,12 +238,11 @@ async def get_hunter_enterprise_user_info() -> str:
     if not _hunter_key():
         return _missing_key()
 
-    await HE_RATE_LIMITER.wait()
-
     return await request_json(
         platform="Hunter Enterprise",
         method="GET",
         url=f"{HUNTER_BASE_URL}/openApi/userInfo",
+        rate_limiter=HE_RATE_LIMITER,
         params=_auth_params(),
         auth_hint="Authentication failed. Check HUNTER_ENTERPRISE_KEY or HUNTER_KEY.",
         forbidden_hint="Access forbidden. Your Hunter enterprise account may not have sufficient permissions or credits.",

@@ -111,12 +111,11 @@ async def get_quake_user_info() -> str:
     if not _quake_key():
         return _missing_key()
 
-    await QUAKE_RATE_LIMITER.wait()
-
     return await request_json(
         platform="Quake",
         method="GET",
         url=f"{QUAKE_BASE_URL}/api/v3/user/info",
+        rate_limiter=QUAKE_RATE_LIMITER,
         headers=_headers(),
         auth_hint="Authentication failed. Check QUAKE_KEY.",
         forbidden_hint="Access forbidden. Your Quake account may not have sufficient permissions.",
@@ -128,12 +127,11 @@ async def get_quake_filterable_fields() -> str:
     if not _quake_key():
         return _missing_key()
 
-    await QUAKE_RATE_LIMITER.wait()
-
     return await request_json(
         platform="Quake",
         method="GET",
         url=f"{QUAKE_BASE_URL}/api/v3/filterable/field/quake_service",
+        rate_limiter=QUAKE_RATE_LIMITER,
         headers=_headers(),
         auth_hint="Authentication failed. Check QUAKE_KEY.",
         forbidden_hint="Access forbidden. Your Quake account may not have sufficient permissions.",
@@ -174,12 +172,11 @@ async def search_quake_service(
         end_time=end_time,
     )
 
-    await QUAKE_RATE_LIMITER.wait()
-
     return await request_json(
         platform="Quake",
         method="POST",
         url=f"{QUAKE_BASE_URL}/api/v3/search/quake_service",
+        rate_limiter=QUAKE_RATE_LIMITER,
         headers=_headers(json=True),
         json=payload,
         auth_hint="Authentication failed. Check QUAKE_KEY.",
@@ -221,12 +218,11 @@ async def scroll_quake_service(
         end_time=end_time,
     )
 
-    await QUAKE_RATE_LIMITER.wait()
-
     return await request_json(
         platform="Quake",
         method="POST",
         url=f"{QUAKE_BASE_URL}/api/v3/scroll/quake_service",
+        rate_limiter=QUAKE_RATE_LIMITER,
         headers=_headers(json=True),
         json=payload,
         auth_hint="Authentication failed. Check QUAKE_KEY.",
@@ -239,12 +235,11 @@ async def get_quake_aggregation_fields() -> str:
     if not _quake_key():
         return _missing_key()
 
-    await QUAKE_RATE_LIMITER.wait()
-
     return await request_json(
         platform="Quake",
         method="GET",
         url=f"{QUAKE_BASE_URL}/api/v3/aggregation/quake_service",
+        rate_limiter=QUAKE_RATE_LIMITER,
         headers=_headers(),
         auth_hint="Authentication failed. Check QUAKE_KEY.",
         forbidden_hint="Access forbidden. Your Quake account may not have sufficient permissions.",
@@ -285,12 +280,11 @@ async def aggregate_quake_service(
     _put_if_value(payload, "end_time", end_time)
     _put_csv(payload, "ip_list", ip_list)
 
-    await QUAKE_RATE_LIMITER.wait()
-
     return await request_json(
         platform="Quake",
         method="POST",
         url=f"{QUAKE_BASE_URL}/api/v3/aggregation/quake_service",
+        rate_limiter=QUAKE_RATE_LIMITER,
         headers=_headers(json=True),
         json=payload,
         auth_hint="Authentication failed. Check QUAKE_KEY.",

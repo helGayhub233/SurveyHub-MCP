@@ -27,6 +27,10 @@ All notable changes to SurveyHub-MCP will be documented in this file.
 
 - README simplified to reflect Chinese-platform-only focus.
 - `pyproject.toml` shortened description and keywords, removed 9 single-platform entry points.
+- Centralized rate limiting in the shared HTTP helpers so 429 retries are throttled along with initial requests.
+- Improved 429 `Retry-After` handling to support both seconds and HTTP-date values.
+
+## [1.10.0] - 2026-06-17
 
 ### Added
 
