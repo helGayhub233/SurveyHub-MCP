@@ -8,7 +8,7 @@ from typing import Annotated
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
-from .common import missing_env_message, platform_key, request_json, split_csv
+from .common import AsyncRateLimiter, missing_env_message, platform_key, request_json, split_csv
 
 QUAKE_BASE_URL = "https://quake.360.net"
 QUAKE_KEY_URL = "https://quake.360.net -> Personal Center -> Key Management"
@@ -36,6 +36,8 @@ QUAKE_AGGREGATION_FIELDS = (
     "unique_city, province, province_cn, country, country_cn, country_code, "
     "city, city_cn, district, district_cn, province_of_china"
 )
+
+QUAKE_RATE_LIMITER = AsyncRateLimiter(1.0)
 
 
 def _quake_key() -> str | None:
@@ -113,6 +115,7 @@ async def get_quake_user_info() -> str:
         platform="Quake",
         method="GET",
         url=f"{QUAKE_BASE_URL}/api/v3/user/info",
+        rate_limiter=QUAKE_RATE_LIMITER,
         headers=_headers(),
         auth_hint="Authentication failed. Check QUAKE_KEY.",
         forbidden_hint="Access forbidden. Your Quake account may not have sufficient permissions.",
@@ -128,6 +131,7 @@ async def get_quake_filterable_fields() -> str:
         platform="Quake",
         method="GET",
         url=f"{QUAKE_BASE_URL}/api/v3/filterable/field/quake_service",
+        rate_limiter=QUAKE_RATE_LIMITER,
         headers=_headers(),
         auth_hint="Authentication failed. Check QUAKE_KEY.",
         forbidden_hint="Access forbidden. Your Quake account may not have sufficient permissions.",
@@ -172,6 +176,7 @@ async def search_quake_service(
         platform="Quake",
         method="POST",
         url=f"{QUAKE_BASE_URL}/api/v3/search/quake_service",
+        rate_limiter=QUAKE_RATE_LIMITER,
         headers=_headers(json=True),
         json=payload,
         auth_hint="Authentication failed. Check QUAKE_KEY.",
@@ -217,6 +222,7 @@ async def scroll_quake_service(
         platform="Quake",
         method="POST",
         url=f"{QUAKE_BASE_URL}/api/v3/scroll/quake_service",
+        rate_limiter=QUAKE_RATE_LIMITER,
         headers=_headers(json=True),
         json=payload,
         auth_hint="Authentication failed. Check QUAKE_KEY.",
@@ -233,6 +239,7 @@ async def get_quake_aggregation_fields() -> str:
         platform="Quake",
         method="GET",
         url=f"{QUAKE_BASE_URL}/api/v3/aggregation/quake_service",
+        rate_limiter=QUAKE_RATE_LIMITER,
         headers=_headers(),
         auth_hint="Authentication failed. Check QUAKE_KEY.",
         forbidden_hint="Access forbidden. Your Quake account may not have sufficient permissions.",
@@ -277,6 +284,7 @@ async def aggregate_quake_service(
         platform="Quake",
         method="POST",
         url=f"{QUAKE_BASE_URL}/api/v3/aggregation/quake_service",
+        rate_limiter=QUAKE_RATE_LIMITER,
         headers=_headers(json=True),
         json=payload,
         auth_hint="Authentication failed. Check QUAKE_KEY.",

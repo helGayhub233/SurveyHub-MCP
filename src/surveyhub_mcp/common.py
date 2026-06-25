@@ -7,6 +7,8 @@ import base64
 import json
 import os
 import time
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 
@@ -79,7 +81,7 @@ def first_env(names: tuple[str, ...]) -> tuple[str | None, str | None]:
 
 
 # ---------------------------------------------------------------------------
-# Region-prefixed env-var helpers (cn / us / pt / cy / fr / ae / kr)
+# Region-prefixed env-var helpers (cn)
 # ---------------------------------------------------------------------------
 
 PLATFORM_PREFIX: dict[str, str] = {
@@ -92,22 +94,6 @@ PLATFORM_PREFIX: dict[str, str] = {
     "HUNTER_PERSONAL_KEY": "CN",
     "HUNTER_ENTERPRISE_KEY": "CN",
     "DAYDAYMAP_API_KEY": "CN",
-    # us: United States platforms
-    "SHODAN_API_KEY": "US",
-    "CENSYS_API_ID": "US",
-    "CENSYS_API_SECRET": "US",
-    "SECURITYTRAILS_API_KEY": "US",
-    # pt: Portugal platforms
-    "BINARYEDGE_API_KEY": "PT",
-    # cy: Cyprus platforms
-    "NETLAS_API_KEY": "CY",
-    # fr: France platforms
-    "ONYPHE_API_KEY": "FR",
-    "LEAKIX_API_KEY": "FR",
-    # ae: United Arab Emirates platforms
-    "FULLHUNT_API_KEY": "AE",
-    # kr: Korean platforms
-    "CRIMINALIP_API_KEY": "KR",
 }
 
 
@@ -209,6 +195,24 @@ def format_http_error(
     return message.strip()
 
 
+def _retry_delay(response: httpx.Response, attempt: int) -> float:
+    retry_after = response.headers.get("Retry-After")
+    if retry_after:
+        try:
+            return max(0.0, float(retry_after))
+        except ValueError:
+            try:
+                retry_at = parsedate_to_datetime(retry_after)
+            except (TypeError, ValueError):
+                pass
+            else:
+                if retry_at.tzinfo is None:
+                    retry_at = retry_at.replace(tzinfo=timezone.utc)
+                return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
+
+    return RETRY_BASE_DELAY * (2**attempt)
+
+
 async def request_json(
     *,
     platform: str,
@@ -216,6 +220,7 @@ async def request_json(
     url: str,
     auth_hint: str,
     forbidden_hint: str,
+    rate_limiter: AsyncRateLimiter | None = None,
     **kwargs: Any,
 ) -> str:
     """Send an HTTP request and return a JSON or error text response.
@@ -224,21 +229,15 @@ async def request_json(
     """
     for attempt in range(MAX_RETRIES + 1):
         try:
+            if rate_limiter:
+                await rate_limiter.wait()
             async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
                 response = await client.request(method, url, **kwargs)
                 response.raise_for_status()
                 return render_response_body(response)
         except httpx.HTTPStatusError as error:
             if error.response.status_code == 429 and attempt < MAX_RETRIES:
-                retry_after = error.response.headers.get("Retry-After")
-                if retry_after:
-                    try:
-                        delay = float(retry_after)
-                    except ValueError:
-                        delay = RETRY_BASE_DELAY ** attempt
-                else:
-                    delay = RETRY_BASE_DELAY ** attempt
-                await asyncio.sleep(delay)
+                await asyncio.sleep(_retry_delay(error.response, attempt))
                 continue
             return format_http_error(
                 platform=platform,
@@ -260,6 +259,7 @@ async def request_download(
     output_path: str,
     auth_hint: str,
     forbidden_hint: str,
+    rate_limiter: AsyncRateLimiter | None = None,
     **kwargs: Any,
 ) -> str:
     """Send an HTTP request and save the response body to a local file.
@@ -268,6 +268,8 @@ async def request_download(
     """
     for attempt in range(MAX_RETRIES + 1):
         try:
+            if rate_limiter:
+                await rate_limiter.wait()
             async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
                 response = await client.request(method, url, **kwargs)
                 response.raise_for_status()
@@ -285,15 +287,7 @@ async def request_download(
                 return f"Downloaded {len(response.content)} bytes from {platform} to {path}."
         except httpx.HTTPStatusError as error:
             if error.response.status_code == 429 and attempt < MAX_RETRIES:
-                retry_after = error.response.headers.get("Retry-After")
-                if retry_after:
-                    try:
-                        delay = float(retry_after)
-                    except ValueError:
-                        delay = RETRY_BASE_DELAY ** attempt
-                else:
-                    delay = RETRY_BASE_DELAY ** attempt
-                await asyncio.sleep(delay)
+                await asyncio.sleep(_retry_delay(error.response, attempt))
                 continue
             return format_http_error(
                 platform=platform,

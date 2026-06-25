@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from typing import Annotated
 from urllib.parse import quote
 
@@ -94,12 +93,11 @@ async def search_fofa(
         }
     )
 
-    await FOFA_SEARCH_RATE_LIMITER.wait()
-
     return await request_json(
         platform="FOFA",
         method="GET",
         url=f"{FOFA_BASE_URL}/api/v1/search/all",
+        rate_limiter=FOFA_SEARCH_RATE_LIMITER,
         params=params,
         auth_hint="Authentication failed. Check FOFA_KEY and FOFA_EMAIL if you use it.",
         forbidden_hint="Access forbidden. Your FOFA account may not have sufficient permissions.",
@@ -133,12 +131,11 @@ async def search_fofa_next(
     if next_id:
         params["next"] = next_id
 
-    await FOFA_SEARCH_RATE_LIMITER.wait()
-
     return await request_json(
         platform="FOFA",
         method="GET",
         url=f"{FOFA_BASE_URL}/api/v1/search/next",
+        rate_limiter=FOFA_SEARCH_RATE_LIMITER,
         params=params,
         auth_hint="Authentication failed. Check FOFA_KEY and FOFA_EMAIL if you use it.",
         forbidden_hint="Access forbidden. Your FOFA account may not have sufficient permissions.",
@@ -151,12 +148,12 @@ async def search_fofa_stats(*, query: str, fields: str = "protocol,domain,port")
         return _missing_key()
 
     params = _add_fofa_auth({"qbase64": encode_base64(query), "fields": fields})
-    await FOFA_STATS_RATE_LIMITER.wait()
 
     return await request_json(
         platform="FOFA",
         method="GET",
         url=f"{FOFA_BASE_URL}/api/v1/search/stats",
+        rate_limiter=FOFA_STATS_RATE_LIMITER,
         params=params,
         auth_hint="Authentication failed. Check FOFA_KEY and FOFA_EMAIL if you use it.",
         forbidden_hint="Access forbidden. Your FOFA account may not have sufficient permissions.",
@@ -169,12 +166,12 @@ async def get_fofa_host(*, host: str, detail: bool = False) -> str:
         return _missing_key()
 
     params = _add_fofa_auth({"detail": detail})
-    await FOFA_HOST_RATE_LIMITER.wait()
 
     return await request_json(
         platform="FOFA",
         method="GET",
         url=f"{FOFA_BASE_URL}/api/v1/host/{quote(host, safe='')}",
+        rate_limiter=FOFA_HOST_RATE_LIMITER,
         params=params,
         auth_hint="Authentication failed. Check FOFA_KEY and FOFA_EMAIL if you use it.",
         forbidden_hint="Access forbidden. Your FOFA account may not have sufficient permissions.",

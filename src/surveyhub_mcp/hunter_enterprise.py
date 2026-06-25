@@ -9,6 +9,7 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
 from .common import (
+    AsyncRateLimiter,
     encode_base64_url,
     missing_any_env_message,
     platform_env,
@@ -26,6 +27,8 @@ HUNTER_ENTERPRISE_FIELDS = (
     "province,city,is_web,isp,as_org,cert_sha256,ssl_certificate,"
     "component,asset_tag,updated_at,header,header_server,banner,whois,body,vul_list"
 )
+
+HE_RATE_LIMITER = AsyncRateLimiter(1.0)
 
 
 def _hunter_key() -> str | None:
@@ -103,6 +106,7 @@ async def search_hunter_enterprise(
         platform="Hunter Enterprise",
         method="GET",
         url=f"{HUNTER_BASE_URL}/openApi/search",
+        rate_limiter=HE_RATE_LIMITER,
         params=params,
         auth_hint="Authentication failed. Check HUNTER_ENTERPRISE_KEY or HUNTER_KEY.",
         forbidden_hint="Access forbidden. Your Hunter enterprise account may not have sufficient permissions or credits.",
@@ -150,6 +154,7 @@ async def create_hunter_enterprise_batch_task(
                 platform="Hunter Enterprise",
                 method="POST",
                 url=f"{HUNTER_BASE_URL}/openApi/search/batch",
+                rate_limiter=HE_RATE_LIMITER,
                 params=params,
                 files={"file": (path.name, file_obj, "text/csv")},
                 auth_hint="Authentication failed. Check HUNTER_ENTERPRISE_KEY or HUNTER_KEY.",
@@ -160,6 +165,7 @@ async def create_hunter_enterprise_batch_task(
         platform="Hunter Enterprise",
         method="POST",
         url=f"{HUNTER_BASE_URL}/openApi/search/batch",
+        rate_limiter=HE_RATE_LIMITER,
         params=params,
         auth_hint="Authentication failed. Check HUNTER_ENTERPRISE_KEY or HUNTER_KEY.",
         forbidden_hint="Access forbidden. Your Hunter enterprise account may not have sufficient permissions or credits.",
@@ -175,6 +181,7 @@ async def get_hunter_enterprise_batch_status(*, task_id: str) -> str:
         platform="Hunter Enterprise",
         method="GET",
         url=f"{HUNTER_BASE_URL}/openApi/search/batch/{task_id}",
+        rate_limiter=HE_RATE_LIMITER,
         params=_auth_params(),
         auth_hint="Authentication failed. Check HUNTER_ENTERPRISE_KEY or HUNTER_KEY.",
         forbidden_hint="Access forbidden. Your Hunter enterprise account may not have sufficient permissions or credits.",
@@ -191,6 +198,7 @@ async def download_hunter_enterprise_batch_file(*, task_id: str, output_path: st
         method="GET",
         url=f"{HUNTER_BASE_URL}/openApi/search/download/{task_id}",
         output_path=output_path,
+        rate_limiter=HE_RATE_LIMITER,
         params=_auth_params(),
         auth_hint="Authentication failed. Check HUNTER_ENTERPRISE_KEY or HUNTER_KEY.",
         forbidden_hint="Access forbidden. Your Hunter enterprise account may not have sufficient permissions or credits.",
@@ -218,6 +226,7 @@ async def pull_hunter_enterprise_batch_results(
         platform="Hunter Enterprise",
         method="GET",
         url=f"{HUNTER_BASE_URL}/openApi/search/batch/pull",
+        rate_limiter=HE_RATE_LIMITER,
         params=params,
         auth_hint="Authentication failed. Check HUNTER_ENTERPRISE_KEY or HUNTER_KEY.",
         forbidden_hint="Access forbidden. Your Hunter enterprise account may not have sufficient permissions or credits.",
@@ -233,6 +242,7 @@ async def get_hunter_enterprise_user_info() -> str:
         platform="Hunter Enterprise",
         method="GET",
         url=f"{HUNTER_BASE_URL}/openApi/userInfo",
+        rate_limiter=HE_RATE_LIMITER,
         params=_auth_params(),
         auth_hint="Authentication failed. Check HUNTER_ENTERPRISE_KEY or HUNTER_KEY.",
         forbidden_hint="Access forbidden. Your Hunter enterprise account may not have sufficient permissions or credits.",

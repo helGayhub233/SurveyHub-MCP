@@ -1,14 +1,14 @@
 [project]
 name = "surveyhub-mcp"
-version = "1.10.0"
-description = "SurveyHub-MCP FastMCP server for FOFA, Quake, Hunter, ZoomEye, DayDayMap, Shodan, Censys, SecurityTrails, BinaryEdge, Netlas, Onyphe, LeakIX, FullHunt, and Criminal IP cyberspace mapping platforms"
+version = "1.11.0"
+description = "SurveyHub-MCP FastMCP server for FOFA, Quake, Hunter, ZoomEye, and DayDayMap cyberspace mapping platforms"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [
     { name = "helGayhub233" }
 ]
-keywords = ["mcp", "fofa", "quake", "hunter", "zoomeye", "daydaymap", "shodan", "censys", "securitytrails", "binaryedge", "netlas", "onyphe", "leakix", "fullhunt", "criminalip", "cyberspace", "security", "osint"]
+keywords = ["mcp", "fofa", "quake", "hunter", "zoomeye", "daydaymap", "cyberspace", "security", "osint"]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
@@ -67,12 +67,3 @@ hunter-personal-mcp = "surveyhub_mcp.hunter_personal:main"
 hunter-enterprise-mcp = "surveyhub_mcp.hunter_enterprise:main"
 zoomeye-mcp = "surveyhub_mcp.zoomeye:main"
 daydaymap-mcp = "surveyhub_mcp.daydaymap:main"
-shodan-mcp = "surveyhub_mcp.shodan:main"
-censys-mcp = "surveyhub_mcp.censys:main"
-securitytrails-mcp = "surveyhub_mcp.securitytrails:main"
-binaryedge-mcp = "surveyhub_mcp.binaryedge:main"
-netlas-mcp = "surveyhub_mcp.netlas:main"
-onyphe-mcp = "surveyhub_mcp.onyphe:main"
-leakix-mcp = "surveyhub_mcp.leakix:main"
-fullhunt-mcp = "surveyhub_mcp.fullhunt:main"
-criminalip-mcp = "surveyhub_mcp.criminalip:main"

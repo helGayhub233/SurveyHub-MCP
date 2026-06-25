@@ -9,6 +9,7 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
 from .common import (
+    AsyncRateLimiter,
     encode_base64_url,
     missing_any_env_message,
     platform_env,
@@ -26,6 +27,8 @@ HUNTER_PERSONAL_FIELDS = (
     "province,city,is_web,isp,as_org,cert_sha256,ssl_certificate,"
     "component,asset_tag,updated_at,header,header_server,banner"
 )
+
+HP_RATE_LIMITER = AsyncRateLimiter(1.0)
 
 
 def _hunter_key() -> str | None:
@@ -103,6 +106,7 @@ async def search_hunter_personal(
         platform="Hunter Personal",
         method="GET",
         url=f"{HUNTER_BASE_URL}/openApi/search",
+        rate_limiter=HP_RATE_LIMITER,
         params=params,
         auth_hint="Authentication failed. Check HUNTER_PERSONAL_KEY or HUNTER_KEY.",
         forbidden_hint="Access forbidden. Your Hunter personal account may not have sufficient permissions or credits.",
@@ -150,6 +154,7 @@ async def create_hunter_personal_batch_task(
                 platform="Hunter Personal",
                 method="POST",
                 url=f"{HUNTER_BASE_URL}/openApi/search/batch",
+                rate_limiter=HP_RATE_LIMITER,
                 params=params,
                 files={"file": (path.name, file_obj, "text/csv")},
                 auth_hint="Authentication failed. Check HUNTER_PERSONAL_KEY or HUNTER_KEY.",
@@ -160,6 +165,7 @@ async def create_hunter_personal_batch_task(
         platform="Hunter Personal",
         method="POST",
         url=f"{HUNTER_BASE_URL}/openApi/search/batch",
+        rate_limiter=HP_RATE_LIMITER,
         params=params,
         auth_hint="Authentication failed. Check HUNTER_PERSONAL_KEY or HUNTER_KEY.",
         forbidden_hint="Access forbidden. Your Hunter personal account may not have sufficient permissions or credits.",
@@ -175,6 +181,7 @@ async def get_hunter_personal_batch_status(*, task_id: str) -> str:
         platform="Hunter Personal",
         method="GET",
         url=f"{HUNTER_BASE_URL}/openApi/search/batch/{task_id}",
+        rate_limiter=HP_RATE_LIMITER,
         params=_auth_params(),
         auth_hint="Authentication failed. Check HUNTER_PERSONAL_KEY or HUNTER_KEY.",
         forbidden_hint="Access forbidden. Your Hunter personal account may not have sufficient permissions or credits.",
@@ -191,6 +198,7 @@ async def download_hunter_personal_batch_file(*, task_id: str, output_path: str)
         method="GET",
         url=f"{HUNTER_BASE_URL}/openApi/search/download/{task_id}",
         output_path=output_path,
+        rate_limiter=HP_RATE_LIMITER,
         params=_auth_params(),
         auth_hint="Authentication failed. Check HUNTER_PERSONAL_KEY or HUNTER_KEY.",
         forbidden_hint="Access forbidden. Your Hunter personal account may not have sufficient permissions or credits.",
@@ -206,6 +214,7 @@ async def get_hunter_personal_user_info() -> str:
         platform="Hunter Personal",
         method="GET",
         url=f"{HUNTER_BASE_URL}/openApi/userInfo",
+        rate_limiter=HP_RATE_LIMITER,
         params=_auth_params(),
         auth_hint="Authentication failed. Check HUNTER_PERSONAL_KEY or HUNTER_KEY.",
         forbidden_hint="Access forbidden. Your Hunter personal account may not have sufficient permissions or credits.",
