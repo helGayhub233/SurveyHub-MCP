@@ -1,8 +1,6 @@
 <h1 align="center">SurveyHub-MCP</h1>
 
-<p align="center">基于 <code>FastMCP</code> 编写的空间测绘 MCP Server，聚合查询 FOFA、Quake、Hunter、ZoomEye、DayDayMap 五大国内平台。</p>
-
-<p align="center">适合在 Claude Desktop、Cursor、Codex 程序中作为 MCP 连接器使用。</p>
+<p align="center">基于 <code>FastMCP</code> 编写的空间测绘 MCP Server，聚合查询 FOFA、Quake、Hunter、ZoomEye、DayDayMap</p>
 
 <p align="center">
   <img src="https://img.shields.io/pypi/v/surveyhub-mcp?label=PyPI&color=3775A9" alt="PyPI 版本"/>
@@ -18,8 +16,7 @@
 | --- | --- |
 | FOFA | 资产搜索、连续翻页、统计聚合、Host 聚合、账号信息 |
 | 360 Quake | 服务搜索、深度翻页、聚合查询、字段查询、账号信息 |
-| Hunter 个人版 | 资产搜索、批量任务、任务状态、结果下载、账号信息 |
-| Hunter 企业版 | 资产搜索、批量任务、任务状态、结果下载、结果拉取、账号信息 |
+| Hunter  | 资产搜索、批量任务、任务状态、结果下载、账号信息 |
 | ZoomEye | 资产搜索、账号信息 |
 | DayDayMap | 资产搜索 |
 
@@ -68,8 +65,8 @@ MCP 客户端配置：
 fofa-mcp
 quake-mcp
 zoomeye-mcp
-hunter-personal-mcp
-hunter-enterprise-mcp
+hunter-personal-mcp //个人版
+hunter-enterprise-mcp //企业版
 daydaymap-mcp
 ```
 
