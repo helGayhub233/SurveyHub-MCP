@@ -1,8 +1,16 @@
-# SurveyHub-MCP
+<h1 align="center">SurveyHub-MCP</h1>
 
-基于 `FastMCP` 编写的空间测绘 MCP Server，聚合查询 FOFA、Quake、Hunter、ZoomEye、DayDayMap 五大国内平台。
+<p align="center">基于 <code>FastMCP</code> 编写的空间测绘 MCP Server，聚合查询 FOFA、Quake、Hunter、ZoomEye、DayDayMap 五大国内平台。</p>
 
-适合在 Claude Desktop、Cursor、Codex 程序中作为 MCP 连接器使用。
+<p align="center">适合在 Claude Desktop、Cursor、Codex 程序中作为 MCP 连接器使用。</p>
+
+<p align="center">
+  <img src="https://img.shields.io/pypi/v/surveyhub-mcp?label=PyPI&color=3775A9" alt="PyPI 版本"/>
+  <img src="https://img.shields.io/badge/Python-%3E%3D3.10-3776AB" alt="Python >=3.10"/>
+  <img src="https://img.shields.io/github/stars/helGayhub233/SurveyHub-MCP?style=flat&label=Stars&color=181717" alt="GitHub Stars"/>
+  <img src="https://img.shields.io/pypi/dm/surveyhub-mcp?label=Downloads&color=2EA44F" alt="PyPI 下载量"/>
+  <img src="https://img.shields.io/github/license/helGayhub233/SurveyHub-MCP?label=License&color=blue" alt="许可证"/>
+</p>
 
 ## 支持平台
 
