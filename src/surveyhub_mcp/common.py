@@ -14,9 +14,13 @@ from typing import Any
 
 import httpx
 
-DEFAULT_TIMEOUT = 30.0
-MAX_RETRIES = 3
-RETRY_BASE_DELAY = 2.0
+DEFAULT_TIMEOUT = 15.0
+MAX_RETRIES = 2
+RETRY_BASE_DELAY = 1.0
+MAX_RETRY_DELAY = 5.0
+CIRCUIT_FAILURE_THRESHOLD = 2
+CIRCUIT_RECOVERY_TIMEOUT = 15.0
+CIRCUIT_BREAKER_HTTP_STATUSES = {408, 429, 500, 502, 503, 504}
 
 
 class AsyncRateLimiter:
@@ -34,6 +38,68 @@ class AsyncRateLimiter:
             if wait_seconds > 0:
                 await asyncio.sleep(wait_seconds)
             self._last_started_at = time.monotonic()
+
+
+class AsyncCircuitBreaker:
+    """Track provider health and temporarily block repeated failing calls."""
+
+    def __init__(self, *, failure_threshold: int, recovery_timeout: float) -> None:
+        self._failure_threshold = failure_threshold
+        self._recovery_timeout = recovery_timeout
+        self._failure_count = 0
+        self._opened_until = 0.0
+        self._half_open_in_flight = False
+        self._lock = asyncio.Lock()
+
+    async def allow_request(self) -> tuple[bool, float]:
+        async with self._lock:
+            now = time.monotonic()
+            if self._opened_until <= now:
+                if self._opened_until:
+                    if self._half_open_in_flight:
+                        return False, 0.0
+                    self._half_open_in_flight = True
+                return True, 0.0
+
+            return False, self._opened_until - now
+
+    async def record_success(self) -> None:
+        async with self._lock:
+            self._failure_count = 0
+            self._opened_until = 0.0
+            self._half_open_in_flight = False
+
+    async def record_failure(self) -> None:
+        async with self._lock:
+            self._failure_count += 1
+            self._half_open_in_flight = False
+            if self._failure_count >= self._failure_threshold:
+                self._opened_until = time.monotonic() + self._recovery_timeout
+
+
+_CIRCUIT_BREAKERS: dict[str, AsyncCircuitBreaker] = {}
+
+
+def _circuit_breaker_for(platform: str) -> AsyncCircuitBreaker:
+    breaker = _CIRCUIT_BREAKERS.get(platform)
+    if breaker is None:
+        breaker = AsyncCircuitBreaker(
+            failure_threshold=CIRCUIT_FAILURE_THRESHOLD,
+            recovery_timeout=CIRCUIT_RECOVERY_TIMEOUT,
+        )
+        _CIRCUIT_BREAKERS[platform] = breaker
+    return breaker
+
+
+def _circuit_open_message(platform: str, retry_after: float) -> str:
+    return (
+        f"{platform} API is temporarily unavailable because recent requests failed. "
+        f"Retry after {max(1, int(retry_after))} seconds."
+    )
+
+
+def _cap_retry_delay(delay: float) -> float:
+    return min(MAX_RETRY_DELAY, max(0.0, delay))
 
 
 def encode_base64(text: str) -> str:
@@ -199,7 +265,7 @@ def _retry_delay(response: httpx.Response, attempt: int) -> float:
     retry_after = response.headers.get("Retry-After")
     if retry_after:
         try:
-            return max(0.0, float(retry_after))
+            return _cap_retry_delay(float(retry_after))
         except ValueError:
             try:
                 retry_at = parsedate_to_datetime(retry_after)
@@ -208,9 +274,13 @@ def _retry_delay(response: httpx.Response, attempt: int) -> float:
             else:
                 if retry_at.tzinfo is None:
                     retry_at = retry_at.replace(tzinfo=timezone.utc)
-                return max(0.0, (retry_at - datetime.now(timezone.utc)).total_seconds())
+                return _cap_retry_delay((retry_at - datetime.now(timezone.utc)).total_seconds())
 
-    return RETRY_BASE_DELAY * (2**attempt)
+    return _cap_retry_delay(RETRY_BASE_DELAY * (2**attempt))
+
+
+def _should_trip_circuit(error: httpx.HTTPStatusError) -> bool:
+    return error.response.status_code in CIRCUIT_BREAKER_HTTP_STATUSES
 
 
 async def request_json(
@@ -227,6 +297,11 @@ async def request_json(
 
     Automatically retries on HTTP 429 (rate-limit) with exponential backoff.
     """
+    circuit_breaker = _circuit_breaker_for(platform)
+    allowed, retry_after = await circuit_breaker.allow_request()
+    if not allowed:
+        return _circuit_open_message(platform, retry_after)
+
     for attempt in range(MAX_RETRIES + 1):
         try:
             if rate_limiter:
@@ -234,11 +309,16 @@ async def request_json(
             async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
                 response = await client.request(method, url, **kwargs)
                 response.raise_for_status()
+                await circuit_breaker.record_success()
                 return render_response_body(response)
         except httpx.HTTPStatusError as error:
             if error.response.status_code == 429 and attempt < MAX_RETRIES:
                 await asyncio.sleep(_retry_delay(error.response, attempt))
                 continue
+            if _should_trip_circuit(error):
+                await circuit_breaker.record_failure()
+            else:
+                await circuit_breaker.record_success()
             return format_http_error(
                 platform=platform,
                 error=error,
@@ -246,7 +326,11 @@ async def request_json(
                 forbidden_hint=forbidden_hint,
             )
         except httpx.TimeoutException:
+            await circuit_breaker.record_failure()
             return f"Request timeout: {platform} API did not respond within {DEFAULT_TIMEOUT:.0f} seconds."
+        except httpx.RequestError as error:
+            await circuit_breaker.record_failure()
+            return f"Error querying {platform}: {type(error).__name__}: {error}"
         except Exception as error:
             return f"Error querying {platform}: {type(error).__name__}: {error}"
 
@@ -266,6 +350,11 @@ async def request_download(
 
     Automatically retries on HTTP 429 (rate-limit) with exponential backoff.
     """
+    circuit_breaker = _circuit_breaker_for(platform)
+    allowed, retry_after = await circuit_breaker.allow_request()
+    if not allowed:
+        return _circuit_open_message(platform, retry_after)
+
     for attempt in range(MAX_RETRIES + 1):
         try:
             if rate_limiter:
@@ -273,6 +362,7 @@ async def request_download(
             async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
                 response = await client.request(method, url, **kwargs)
                 response.raise_for_status()
+                await circuit_breaker.record_success()
 
                 content_type = response.headers.get("content-type", "")
                 if "json" in content_type.lower():
@@ -289,6 +379,10 @@ async def request_download(
             if error.response.status_code == 429 and attempt < MAX_RETRIES:
                 await asyncio.sleep(_retry_delay(error.response, attempt))
                 continue
+            if _should_trip_circuit(error):
+                await circuit_breaker.record_failure()
+            else:
+                await circuit_breaker.record_success()
             return format_http_error(
                 platform=platform,
                 error=error,
@@ -296,6 +390,10 @@ async def request_download(
                 forbidden_hint=forbidden_hint,
             )
         except httpx.TimeoutException:
+            await circuit_breaker.record_failure()
             return f"Request timeout: {platform} API did not respond within {DEFAULT_TIMEOUT:.0f} seconds."
+        except httpx.RequestError as error:
+            await circuit_breaker.record_failure()
+            return f"Error downloading from {platform}: {type(error).__name__}: {error}"
         except Exception as error:
             return f"Error downloading from {platform}: {type(error).__name__}: {error}"

@@ -2,6 +2,24 @@
 
 All notable changes to SurveyHub-MCP will be documented in this file.
 
+## [1.13.0] - 2026-06-26
+
+### Changed
+
+- Tuned Quake's process-local rate limit from 1 second to 5 seconds per request.
+
+## [1.12.0] - 2026-06-26
+
+### Added
+
+- Added process-local circuit breaker protection for all platform HTTP requests.
+- Added unit tests for circuit breaker state transitions and retry delay caps.
+
+### Changed
+
+- Tuned default HTTP timeout and retry delays for interactive MCP clients.
+- Capped `Retry-After` wait time to avoid long IDE/tool-call stalls.
+
 ## [1.11.0] - 2026-06-25
 
 ### Removed
