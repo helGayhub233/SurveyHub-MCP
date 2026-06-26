@@ -37,7 +37,7 @@ QUAKE_AGGREGATION_FIELDS = (
     "city, city_cn, district, district_cn, province_of_china"
 )
 
-QUAKE_RATE_LIMITER = AsyncRateLimiter(1.0)
+QUAKE_RATE_LIMITER = AsyncRateLimiter(5.0)
 
 
 def _quake_key() -> str | None:
