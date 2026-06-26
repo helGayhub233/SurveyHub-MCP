@@ -235,7 +235,7 @@ API Key 获取入口：
 | FOFA | `fofa_host` | 进程内节流，`1 秒/次` |
 | FOFA | `fofa_search`, `fofa_search_next` | 本地校验，返回 `body` 时 `size <= 500` |
 | FOFA | `fofa_search`, `fofa_search_next` | 本地校验，返回 `cert` 或 `banner` 时 `size <= 2000` |
-| Quake | 全部搜索工具 | 进程内节流，`1 秒/次` |
+| Quake | 全部工具 | 进程内节流，`5 秒/次` |
 | Quake | `quake_service_search`, `quake_service_scroll` | 参数 schema 限制，`size <= 500` |
 | Quake | `quake_service_aggregation` | 本地校验聚合字段最多 2 个，参数 schema 限制 `size <= 10000` |
 | ZoomEye | `zoomeye_search` | 参数 schema 限制，`pagesize <= 10000` |

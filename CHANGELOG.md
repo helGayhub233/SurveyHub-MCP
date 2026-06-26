@@ -2,6 +2,12 @@
 
 All notable changes to SurveyHub-MCP will be documented in this file.
 
+## [1.13.0] - 2026-06-26
+
+### Changed
+
+- Tuned Quake's process-local rate limit from 1 second to 5 seconds per request.
+
 ## [1.12.0] - 2026-06-26
 
 ### Added
