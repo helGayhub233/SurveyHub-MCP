@@ -112,6 +112,31 @@ def encode_base64_url(text: str) -> str:
     return base64.urlsafe_b64encode(text.encode("utf-8")).decode("ascii")
 
 
+HUNTER_EXACT_SEARCH_EXCLUDED_FIELDS = {"after", "before"}
+
+
+def normalize_hunter_query(query: str, *, exact_search: bool = True) -> str:
+    """Use Hunter exact string comparisons by default.
+
+    Hunter treats field="value" as a fuzzy contains query. For MCP callers, the
+    safer default is field=="value"; callers can opt out for native fuzzy search.
+    """
+    if not exact_search:
+        return query
+
+    import re
+
+    pattern = re.compile(r"(?P<field>[A-Za-z][\w.-]*)\s*=(?!=)\s*\"")
+
+    def replace(match: re.Match[str]) -> str:
+        field = match.group("field")
+        if field in HUNTER_EXACT_SEARCH_EXCLUDED_FIELDS:
+            return match.group(0)
+        return f'{field}=="'
+
+    return pattern.sub(replace, query)
+
+
 def split_csv(value: str | None) -> list[str] | None:
     """Split a comma-separated string into a clean list."""
     if not value:
