@@ -178,7 +178,7 @@ uv run daydaymap-mcp
 | 环境变量 | 说明 |
 | --- | --- |
 | `CN_FOFA_KEY` | FOFA API Key |
-| `CN_FOFA_EMAIL` | FOFA Email，可选 |
+| `CN_FOFA_EMAIL` | FOFA Email |
 | `CN_QUAKE_KEY` | 360 Quake API Key |
 | `CN_ZOOMEYE_API_KEY` | ZoomEye API Key |
 | `CN_HUNTER_KEY` | Hunter 通用 fallback API Key |
