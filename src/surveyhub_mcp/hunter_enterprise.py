@@ -12,6 +12,7 @@ from .common import (
     AsyncRateLimiter,
     encode_base64_url,
     missing_any_env_message,
+    normalize_hunter_query,
     platform_env,
     request_download,
     request_json,
@@ -82,14 +83,16 @@ async def search_hunter_enterprise(
     fields: str | None = None,
     start_time: str | None = None,
     end_time: str | None = None,
+    exact_search: bool = True,
 ) -> str:
     """Call Hunter enterprise /openApi/search."""
     if not _hunter_key():
         return _missing_key()
 
+    prepared_query = normalize_hunter_query(query, exact_search=exact_search)
     params: dict[str, str | int] = {
         **_auth_params(),
-        "search": encode_base64_url(query),
+        "search": encode_base64_url(prepared_query),
         "page": page,
         "page_size": page_size,
         "is_web": is_web,
@@ -124,6 +127,7 @@ async def create_hunter_enterprise_batch_task(
     fields: str | None = None,
     search_type: Literal["all", "ip", "domain", "company"] = "all",
     assets_limit: int | None = None,
+    exact_search: bool = True,
 ) -> str:
     """Create a Hunter enterprise batch search task."""
     if not _hunter_key():
@@ -133,7 +137,8 @@ async def create_hunter_enterprise_batch_task(
 
     params: dict[str, str | int] = {**_auth_params()}
     if query:
-        params["search"] = encode_base64_url(query)
+        prepared_query = normalize_hunter_query(query, exact_search=exact_search)
+        params["search"] = encode_base64_url(prepared_query)
     _add_optional_params(
         params,
         start_time=start_time,
@@ -267,6 +272,10 @@ def register_hunter_enterprise_tools(server: FastMCP) -> None:
         fields: Annotated[str | None, Field(description="Comma-separated return fields.")] = None,
         start_time: Annotated[str | None, Field(description="Start date in YYYY-MM-DD.")] = None,
         end_time: Annotated[str | None, Field(description="End date in YYYY-MM-DD.")] = None,
+        exact_search: Annotated[
+            bool,
+            Field(description='Convert Hunter field="value" fuzzy comparisons to field=="value" exact comparisons by default.'),
+        ] = True,
     ) -> str:
         return await search_hunter_enterprise(
             query=query,
@@ -277,6 +286,7 @@ def register_hunter_enterprise_tools(server: FastMCP) -> None:
             fields=fields,
             start_time=start_time,
             end_time=end_time,
+            exact_search=exact_search,
         )
 
     @server.tool(
@@ -298,6 +308,10 @@ def register_hunter_enterprise_tools(server: FastMCP) -> None:
             Field(description="CSV search type. Enterprise limits: all <=10; ip/domain/company <=10000."),
         ] = "all",
         assets_limit: Annotated[int | None, Field(ge=1, description="Expected exported asset count.")] = None,
+        exact_search: Annotated[
+            bool,
+            Field(description='For query mode, convert Hunter field="value" fuzzy comparisons to field=="value" exact comparisons by default.'),
+        ] = True,
     ) -> str:
         return await create_hunter_enterprise_batch_task(
             query=query,
@@ -309,6 +323,7 @@ def register_hunter_enterprise_tools(server: FastMCP) -> None:
             fields=fields,
             search_type=search_type,
             assets_limit=assets_limit,
+            exact_search=exact_search,
         )
 
     @server.tool(

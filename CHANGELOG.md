@@ -2,6 +2,17 @@
 
 All notable changes to SurveyHub-MCP will be documented in this file.
 
+## [1.14.0] - 2026-07-06
+
+### Changed
+
+- Hunter personal and enterprise queries now default to exact string comparisons by converting `field="value"` to `field=="value"`.
+- Added `exact_search=false` opt-out for Hunter search and query-based batch tasks to preserve native fuzzy matching when needed.
+
+### Removed
+
+- Removed the tracked unit test file from the production package repository.
+
 ## [1.13.0] - 2026-06-26
 
 ### Changed

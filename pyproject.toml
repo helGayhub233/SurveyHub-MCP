@@ -1,6 +1,6 @@
 [project]
 name = "surveyhub-mcp"
-version = "1.13.0"
+version = "1.14.0"
 description = "SurveyHub-MCP FastMCP server for FOFA, Quake, Hunter, ZoomEye, and DayDayMap cyberspace mapping platforms"
 readme = "README.md"
 requires-python = ">=3.10"
