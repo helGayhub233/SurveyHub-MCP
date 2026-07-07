@@ -5,7 +5,6 @@
 <p align="center">
   <img src="https://img.shields.io/pypi/v/surveyhub-mcp?label=PyPI&color=3775A9" alt="PyPI 版本"/>
   <img src="https://img.shields.io/badge/Python-%3E%3D3.10-3776AB" alt="Python >=3.10"/>
-  <img src="https://img.shields.io/github/stars/helGayhub233/SurveyHub-MCP?style=flat&label=Stars&color=181717" alt="GitHub Stars"/>
   <img src="https://img.shields.io/pypi/dm/surveyhub-mcp?label=Downloads&color=2EA44F" alt="PyPI 下载量"/>
   <img src="https://img.shields.io/github/license/helGayhub233/SurveyHub-MCP?label=License&color=blue" alt="许可证"/>
 </p>
