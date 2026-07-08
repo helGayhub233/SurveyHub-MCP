@@ -15,8 +15,8 @@
 | 平台 | 能力 |
 | --- | --- |
 | FOFA | 资产搜索、连续翻页、统计聚合、Host 聚合、账号信息 |
-| 360 Quake | 服务搜索、深度翻页、聚合查询、字段查询、账号信息 |
-| Hunter  | 资产搜索、批量任务、任务状态、结果下载、账号信息 |
+| 360 Quake | 服务搜索、深度翻页、服务聚合、筛选字段、聚合字段、账号信息 |
+| Hunter | 资产搜索、批量任务、任务状态、结果下载、结果拉取、账号信息 |
 | ZoomEye | 资产搜索、账号信息 |
 | DayDayMap | 资产搜索 |
 
@@ -227,7 +227,7 @@ API Key 获取入口：
 
 工具返回结构化结果：成功时包含 `ok=true`、`platform` 和 `data` 或 `text`；失败时包含 `ok=false`、`platform` 和 `error`，便于 MCP 客户端区分业务错误、鉴权错误、限流、超时和参数校验失败。
 
-## MCP Resources 和 Prompts
+## 资源提示
 
 服务会暴露查询语法和 API 文档资源，URI 前缀为 `surveyhub://reference/`，例如：
 
@@ -296,7 +296,7 @@ src/
     common.py             # 共享编码、HTTP、错误处理和节流工具
 ```
 
-## 开发
+## 手动编译
 
 ```bash
 uv sync
@@ -304,7 +304,7 @@ uv run python -m compileall src/surveyhub_mcp
 uv build --wheel
 ```
 
-## 注意
+## 注意事项
 
 请只在合法授权范围内使用本项目，并遵守各平台的 API 服务条款和额度限制。
 
