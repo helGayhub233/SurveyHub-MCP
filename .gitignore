@@ -34,6 +34,9 @@ Thumbs.db
 
 # Local tool state and scratch files
 .playwright-mcp/
+.code-review-graph/
+.agents/
+.codex/
 *.log
 *.tmp
 main.py

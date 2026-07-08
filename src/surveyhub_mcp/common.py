@@ -151,15 +151,48 @@ def render_json(data: Any) -> str:
     return json.dumps(data, indent=2, ensure_ascii=False)
 
 
-def render_response_body(response: httpx.Response) -> str:
-    """Render successful API responses without assuming every body is JSON."""
+def apply_server_metadata(server: Any) -> None:
+    """Keep FastMCP handshake metadata aligned with package metadata."""
+    from . import __version__
+
+    mcp_server = getattr(server, "_mcp_server", None)
+    if mcp_server is not None:
+        mcp_server.version = __version__
+
+
+def response_payload(*, platform: str, response: httpx.Response) -> dict[str, Any]:
+    """Return an MCP-friendly structured payload for successful HTTP responses."""
     if not response.content:
-        return ""
+        return {"ok": True, "platform": platform, "data": None}
 
     try:
-        return render_json(response.json())
+        return {"ok": True, "platform": platform, "data": response.json()}
     except ValueError:
-        return response.text
+        return {"ok": True, "platform": platform, "text": response.text}
+
+
+def error_payload(
+    *,
+    platform: str,
+    message: str,
+    error_type: str,
+    status_code: int | None = None,
+    details: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Return a consistent structured tool error payload."""
+    payload: dict[str, Any] = {
+        "ok": False,
+        "platform": platform,
+        "error": {
+            "type": error_type,
+            "message": message,
+        },
+    }
+    if status_code is not None:
+        payload["error"]["status_code"] = status_code
+    if details:
+        payload["error"]["details"] = details
+    return payload
 
 
 def first_env(names: tuple[str, ...]) -> tuple[str | None, str | None]:
@@ -188,12 +221,17 @@ PLATFORM_PREFIX: dict[str, str] = {
 }
 
 
-def platform_key(var_name: str) -> str | None:
-    """Read env var with region prefix: {PREFIX}_{VAR} only."""
+def canonical_env_name(var_name: str) -> str:
+    """Return the public env var name callers should configure."""
     prefix = PLATFORM_PREFIX.get(var_name)
     if prefix:
-        return os.getenv(f"{prefix}_{var_name}")
-    return os.getenv(var_name)
+        return f"{prefix}_{var_name}"
+    return var_name
+
+
+def platform_key(var_name: str) -> str | None:
+    """Read env var with region prefix: {PREFIX}_{VAR} only."""
+    return os.getenv(canonical_env_name(var_name))
 
 
 def platform_env(*var_names: str) -> tuple[str | None, str | None]:
@@ -211,17 +249,19 @@ def missing_env_message(
     env_var: str,
     key_url: str,
     optional_env: str | None = None,
-) -> str:
+) -> dict[str, Any]:
     """Return a consistent missing-credential message."""
-    env_lines = [f'        "{env_var}": "your_{env_var.lower()}"']
+    public_env_var = canonical_env_name(env_var)
+    env_lines = [f'        "{public_env_var}": "your_{public_env_var.lower()}"']
     if optional_env:
-        env_lines.append(f'        "{optional_env}": "optional"')
+        public_optional_env = canonical_env_name(optional_env)
+        env_lines.append(f'        "{public_optional_env}": "optional"')
 
     env_block = ",\n".join(env_lines)
     optional_note = f"\nNote: {optional_env} is optional." if optional_env else ""
 
-    return (
-        f"Configuration error: {env_var} environment variable is required for {platform}.\n\n"
+    message = (
+        f"Configuration error: {public_env_var} environment variable is required for {platform}.\n\n"
         "Configure it in your MCP client, for example:\n"
         "{\n"
         '  "mcpServers": {\n'
@@ -237,6 +277,12 @@ def missing_env_message(
         f"Get your API key from: {key_url}"
         f"{optional_note}"
     )
+    return error_payload(
+        platform=platform,
+        message=message,
+        error_type="missing_credentials",
+        details={"env_var": public_env_var, "key_url": key_url},
+    )
 
 
 def missing_any_env_message(
@@ -244,12 +290,13 @@ def missing_any_env_message(
     platform: str,
     env_vars: tuple[str, ...],
     key_url: str,
-) -> str:
+) -> dict[str, Any]:
     """Return a missing-credential message for tools accepting multiple env vars."""
-    env_list = " or ".join(env_vars)
-    env_lines = ",\n".join(f'        "{name}": "your_{name.lower()}"' for name in env_vars)
+    public_env_vars = tuple(canonical_env_name(name) for name in env_vars)
+    env_list = " or ".join(public_env_vars)
+    env_lines = ",\n".join(f'        "{name}": "your_{name.lower()}"' for name in public_env_vars)
 
-    return (
+    message = (
         f"Configuration error: {env_list} environment variable is required for {platform}.\n\n"
         "Configure one of them in your MCP client, for example:\n"
         "{\n"
@@ -265,6 +312,12 @@ def missing_any_env_message(
         "}\n\n"
         f"Get your API key from: {key_url}"
     )
+    return error_payload(
+        platform=platform,
+        message=message,
+        error_type="missing_credentials",
+        details={"env_vars": public_env_vars, "key_url": key_url},
+    )
 
 
 def format_http_error(
@@ -273,7 +326,7 @@ def format_http_error(
     error: httpx.HTTPStatusError,
     auth_hint: str,
     forbidden_hint: str,
-) -> str:
+) -> dict[str, Any]:
     """Format HTTP status errors as MCP-friendly text."""
     status_code = error.response.status_code
     message = f"{platform} API error (HTTP {status_code}): {error.response.text}\n\n"
@@ -283,7 +336,12 @@ def format_http_error(
     elif status_code == 403:
         message += forbidden_hint
 
-    return message.strip()
+    return error_payload(
+        platform=platform,
+        message=message.strip(),
+        error_type="http_error",
+        status_code=status_code,
+    )
 
 
 def _retry_delay(response: httpx.Response, attempt: int) -> float:
@@ -317,7 +375,7 @@ async def request_json(
     forbidden_hint: str,
     rate_limiter: AsyncRateLimiter | None = None,
     **kwargs: Any,
-) -> str:
+) -> dict[str, Any]:
     """Send an HTTP request and return a JSON or error text response.
 
     Automatically retries on HTTP 429 (rate-limit) with exponential backoff.
@@ -325,7 +383,12 @@ async def request_json(
     circuit_breaker = _circuit_breaker_for(platform)
     allowed, retry_after = await circuit_breaker.allow_request()
     if not allowed:
-        return _circuit_open_message(platform, retry_after)
+        return error_payload(
+            platform=platform,
+            message=_circuit_open_message(platform, retry_after),
+            error_type="circuit_open",
+            details={"retry_after_seconds": max(1, int(retry_after))},
+        )
 
     for attempt in range(MAX_RETRIES + 1):
         try:
@@ -335,7 +398,7 @@ async def request_json(
                 response = await client.request(method, url, **kwargs)
                 response.raise_for_status()
                 await circuit_breaker.record_success()
-                return render_response_body(response)
+                return response_payload(platform=platform, response=response)
         except httpx.HTTPStatusError as error:
             if error.response.status_code == 429 and attempt < MAX_RETRIES:
                 await asyncio.sleep(_retry_delay(error.response, attempt))
@@ -352,12 +415,24 @@ async def request_json(
             )
         except httpx.TimeoutException:
             await circuit_breaker.record_failure()
-            return f"Request timeout: {platform} API did not respond within {DEFAULT_TIMEOUT:.0f} seconds."
+            return error_payload(
+                platform=platform,
+                message=f"Request timeout: {platform} API did not respond within {DEFAULT_TIMEOUT:.0f} seconds.",
+                error_type="timeout",
+            )
         except httpx.RequestError as error:
             await circuit_breaker.record_failure()
-            return f"Error querying {platform}: {type(error).__name__}: {error}"
+            return error_payload(
+                platform=platform,
+                message=f"Error querying {platform}: {type(error).__name__}: {error}",
+                error_type="request_error",
+            )
         except Exception as error:
-            return f"Error querying {platform}: {type(error).__name__}: {error}"
+            return error_payload(
+                platform=platform,
+                message=f"Error querying {platform}: {type(error).__name__}: {error}",
+                error_type="unexpected_error",
+            )
 
 
 async def request_download(
@@ -370,7 +445,7 @@ async def request_download(
     forbidden_hint: str,
     rate_limiter: AsyncRateLimiter | None = None,
     **kwargs: Any,
-) -> str:
+) -> dict[str, Any]:
     """Send an HTTP request and save the response body to a local file.
 
     Automatically retries on HTTP 429 (rate-limit) with exponential backoff.
@@ -378,7 +453,12 @@ async def request_download(
     circuit_breaker = _circuit_breaker_for(platform)
     allowed, retry_after = await circuit_breaker.allow_request()
     if not allowed:
-        return _circuit_open_message(platform, retry_after)
+        return error_payload(
+            platform=platform,
+            message=_circuit_open_message(platform, retry_after),
+            error_type="circuit_open",
+            details={"retry_after_seconds": max(1, int(retry_after))},
+        )
 
     for attempt in range(MAX_RETRIES + 1):
         try:
@@ -391,15 +471,19 @@ async def request_download(
 
                 content_type = response.headers.get("content-type", "")
                 if "json" in content_type.lower():
-                    try:
-                        return render_json(response.json())
-                    except ValueError:
-                        return response.text
+                    return response_payload(platform=platform, response=response)
 
                 path = Path(output_path).expanduser()
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(response.content)
-                return f"Downloaded {len(response.content)} bytes from {platform} to {path}."
+                return {
+                    "ok": True,
+                    "platform": platform,
+                    "download": {
+                        "bytes": len(response.content),
+                        "path": str(path),
+                    },
+                }
         except httpx.HTTPStatusError as error:
             if error.response.status_code == 429 and attempt < MAX_RETRIES:
                 await asyncio.sleep(_retry_delay(error.response, attempt))
@@ -416,9 +500,21 @@ async def request_download(
             )
         except httpx.TimeoutException:
             await circuit_breaker.record_failure()
-            return f"Request timeout: {platform} API did not respond within {DEFAULT_TIMEOUT:.0f} seconds."
+            return error_payload(
+                platform=platform,
+                message=f"Request timeout: {platform} API did not respond within {DEFAULT_TIMEOUT:.0f} seconds.",
+                error_type="timeout",
+            )
         except httpx.RequestError as error:
             await circuit_breaker.record_failure()
-            return f"Error downloading from {platform}: {type(error).__name__}: {error}"
+            return error_payload(
+                platform=platform,
+                message=f"Error downloading from {platform}: {type(error).__name__}: {error}",
+                error_type="request_error",
+            )
         except Exception as error:
-            return f"Error downloading from {platform}: {type(error).__name__}: {error}"
+            return error_payload(
+                platform=platform,
+                message=f"Error downloading from {platform}: {type(error).__name__}: {error}",
+                error_type="unexpected_error",
+            )

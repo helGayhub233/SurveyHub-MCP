@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import os
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
-from .common import encode_base64, missing_env_message, platform_key, request_json
+from .common import apply_server_metadata, encode_base64, error_payload, missing_env_message, platform_key, request_json
+from .reference import register_reference_resources
 
 ZOOMEYE_BASE_URL = "https://api.zoomeye.org"
 ZOOMEYE_KEY_URL = "https://www.zoomeye.org -> Profile -> API Key"
@@ -20,7 +21,7 @@ def _zoomeye_key() -> str | None:
     return platform_key("ZOOMEYE_API_KEY")
 
 
-def _missing_key() -> str:
+def _missing_key() -> dict[str, Any]:
     return missing_env_message(
         platform="ZoomEye",
         env_var="ZOOMEYE_API_KEY",
@@ -36,7 +37,7 @@ def _headers(*, json: bool = False) -> dict[str, str]:
     return headers
 
 
-async def get_zoomeye_user_info() -> str:
+async def get_zoomeye_user_info() -> dict[str, Any]:
     """Call ZoomEye user information API."""
     if not _zoomeye_key():
         return _missing_key()
@@ -61,14 +62,18 @@ async def search_zoomeye_assets(
     sub_type: Literal["v4", "v6", "web"] = "v4",
     facets: str | None = None,
     ignore_cache: bool = False,
-) -> str:
+) -> dict[str, Any]:
     """Call ZoomEye asset search API."""
     if not _zoomeye_key():
         return _missing_key()
 
     if not qbase64:
         if not query:
-            return "Either query or qbase64 is required."
+            return error_payload(
+                platform="ZoomEye",
+                message="Either query or qbase64 is required.",
+                error_type="validation_error",
+            )
         qbase64 = encode_base64(query)
 
     payload: dict[str, object] = {
@@ -100,9 +105,8 @@ def register_zoomeye_tools(server: FastMCP) -> None:
         name="zoomeye_user_info",
         title="ZoomEye User Info",
         description="Get ZoomEye user, subscription, and points information with POST /v2/userinfo.",
-        structured_output=False,
     )
-    async def zoomeye_user_info() -> str:
+    async def zoomeye_user_info() -> dict[str, Any]:
         return await get_zoomeye_user_info()
 
     @server.tool(
@@ -112,7 +116,6 @@ def register_zoomeye_tools(server: FastMCP) -> None:
             "Search ZoomEye assets with POST /v2/search. Provide raw query for automatic "
             "Base64 encoding, or pass qbase64 directly for compatibility with the API docs."
         ),
-        structured_output=False,
     )
     async def zoomeye_search(
         query: Annotated[
@@ -138,7 +141,7 @@ def register_zoomeye_tools(server: FastMCP) -> None:
             Field(description=f"Comma-separated facet fields. Supported values: {ZOOMEYE_FACETS}."),
         ] = None,
         ignore_cache: Annotated[bool, Field(description="Whether to ignore cached data. Business plans and above support this.")] = False,
-    ) -> str:
+    ) -> dict[str, Any]:
         return await search_zoomeye_assets(
             query=query,
             qbase64=qbase64,
@@ -157,7 +160,9 @@ def create_server() -> FastMCP:
         "zoomeye-mcp",
         instructions="Use ZoomEye tools for user information and asset search APIs.",
     )
+    apply_server_metadata(server)
     register_zoomeye_tools(server)
+    register_reference_resources(server, ("zoomeye-syntax", "zoomeye-api"))
     return server
 
 

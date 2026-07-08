@@ -2,6 +2,20 @@
 
 All notable changes to SurveyHub-MCP will be documented in this file.
 
+## [1.15.0] - 2026-07-08
+
+### Added
+
+- Added MCP reference resources for platform syntax and API documentation.
+- Added aggregate-server prompts for search planning and query help.
+
+### Changed
+
+- Raised the MCP Python SDK minimum version to `>=1.28.0`.
+- Switched tool results to structured MCP output with consistent `ok`, `platform`, `data`, `text`, and `error` fields.
+- Aligned MCP handshake server version with the package version.
+- Included documentation resources in the built wheel.
+
 ## [1.14.0] - 2026-07-06
 
 ### Changed

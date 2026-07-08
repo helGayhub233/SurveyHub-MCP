@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import os
-from typing import Annotated
+from typing import Annotated, Any
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
-from .common import AsyncRateLimiter, missing_env_message, platform_key, request_json, split_csv
+from .common import AsyncRateLimiter, apply_server_metadata, error_payload, missing_env_message, platform_key, request_json, split_csv
+from .reference import register_reference_resources
 
 QUAKE_BASE_URL = "https://quake.360.net"
 QUAKE_KEY_URL = "https://quake.360.net -> Personal Center -> Key Management"
@@ -44,7 +45,7 @@ def _quake_key() -> str | None:
     return platform_key("QUAKE_KEY")
 
 
-def _missing_key() -> str:
+def _missing_key() -> dict[str, Any]:
     return missing_env_message(
         platform="Quake",
         env_var="QUAKE_KEY",
@@ -106,7 +107,7 @@ def _service_payload(
     return payload
 
 
-async def get_quake_user_info() -> str:
+async def get_quake_user_info() -> dict[str, Any]:
     """Call Quake user information API."""
     if not _quake_key():
         return _missing_key()
@@ -122,7 +123,7 @@ async def get_quake_user_info() -> str:
     )
 
 
-async def get_quake_filterable_fields() -> str:
+async def get_quake_filterable_fields() -> dict[str, Any]:
     """Call Quake service filterable fields API."""
     if not _quake_key():
         return _missing_key()
@@ -152,7 +153,7 @@ async def search_quake_service(
     latest: bool = True,
     start_time: str | None = None,
     end_time: str | None = None,
-) -> str:
+) -> dict[str, Any]:
     """Call Quake real-time service search API."""
     if not _quake_key():
         return _missing_key()
@@ -198,7 +199,7 @@ async def scroll_quake_service(
     latest: bool = True,
     start_time: str | None = None,
     end_time: str | None = None,
-) -> str:
+) -> dict[str, Any]:
     """Call Quake scroll service search API."""
     if not _quake_key():
         return _missing_key()
@@ -230,7 +231,7 @@ async def scroll_quake_service(
     )
 
 
-async def get_quake_aggregation_fields() -> str:
+async def get_quake_aggregation_fields() -> dict[str, Any]:
     """Call Quake aggregation fields API."""
     if not _quake_key():
         return _missing_key()
@@ -257,16 +258,25 @@ async def aggregate_quake_service(
     latest: bool = True,
     start_time: str | None = None,
     end_time: str | None = None,
-) -> str:
+) -> dict[str, Any]:
     """Call Quake service aggregation API."""
     if not _quake_key():
         return _missing_key()
 
     aggregations = split_csv(aggregation_list)
     if not aggregations:
-        return "aggregation_list is required. Provide one or two comma-separated aggregation fields."
+        return error_payload(
+            platform="Quake",
+            message="aggregation_list is required. Provide one or two comma-separated aggregation fields.",
+            error_type="validation_error",
+        )
     if len(aggregations) > 2:
-        return "aggregation_list supports at most two fields."
+        return error_payload(
+            platform="Quake",
+            message="aggregation_list supports at most two fields.",
+            error_type="validation_error",
+            details={"aggregation_list": aggregation_list},
+        )
 
     payload: dict[str, object] = {
         "query": query,
@@ -299,9 +309,8 @@ def register_quake_tools(server: FastMCP) -> None:
         name="quake_user_info",
         title="Quake User Info",
         description="Get Quake user details, quota, token, and role information with /api/v3/user/info.",
-        structured_output=False,
     )
-    async def quake_user_info() -> str:
+    async def quake_user_info() -> dict[str, Any]:
         return await get_quake_user_info()
 
     @server.tool(
@@ -311,9 +320,8 @@ def register_quake_tools(server: FastMCP) -> None:
             "Get Quake service fields usable in include/exclude with "
             f"/api/v3/filterable/field/quake_service. Examples: {QUAKE_FILTERABLE_FIELDS}."
         ),
-        structured_output=False,
     )
-    async def quake_filterable_fields() -> str:
+    async def quake_filterable_fields() -> dict[str, Any]:
         return await get_quake_filterable_fields()
 
     @server.tool(
@@ -323,7 +331,6 @@ def register_quake_tools(server: FastMCP) -> None:
             "Run real-time Quake service search with /api/v3/search/quake_service. "
             "Use this for small result sets; use quake_service_scroll for deep pagination."
         ),
-        structured_output=False,
     )
     async def quake_service_search(
         query: Annotated[str, Field(description='Quake query, for example service:http or port:443 AND country:"China".')],
@@ -338,7 +345,7 @@ def register_quake_tools(server: FastMCP) -> None:
         latest: Annotated[bool, Field(description="Whether to use latest data.")] = True,
         start_time: Annotated[str | None, Field(description="UTC start time, for example 2020-10-14 00:00:00.")] = None,
         end_time: Annotated[str | None, Field(description="UTC end time, for example 2020-10-14 00:00:00.")] = None,
-    ) -> str:
+    ) -> dict[str, Any]:
         return await search_quake_service(
             query=query,
             start=start,
@@ -361,7 +368,6 @@ def register_quake_tools(server: FastMCP) -> None:
             "Run deep-pagination Quake service search with /api/v3/scroll/quake_service. "
             "Use meta.pagination_id from the response as pagination_id for the next page."
         ),
-        structured_output=False,
     )
     async def quake_service_scroll(
         query: Annotated[str, Field(description='Quake query, for example service:http or port:443 AND country:"China".')],
@@ -376,7 +382,7 @@ def register_quake_tools(server: FastMCP) -> None:
         latest: Annotated[bool, Field(description="Whether to use latest data.")] = True,
         start_time: Annotated[str | None, Field(description="UTC start time, for example 2020-10-14 00:00:00.")] = None,
         end_time: Annotated[str | None, Field(description="UTC end time, for example 2020-10-14 00:00:00.")] = None,
-    ) -> str:
+    ) -> dict[str, Any]:
         return await scroll_quake_service(
             query=query,
             size=size,
@@ -396,7 +402,6 @@ def register_quake_tools(server: FastMCP) -> None:
         name="quake_search",
         title="Quake Search (Scroll Compatibility)",
         description="Backward-compatible alias for quake_service_scroll.",
-        structured_output=False,
     )
     async def quake_search(
         query: Annotated[str, Field(description='Quake query, for example service:http or port:443 AND country:"China".')],
@@ -408,7 +413,7 @@ def register_quake_tools(server: FastMCP) -> None:
         latest: Annotated[bool, Field(description="Whether to use latest data.")] = True,
         start_time: Annotated[str | None, Field(description="UTC start time.")] = None,
         end_time: Annotated[str | None, Field(description="UTC end time.")] = None,
-    ) -> str:
+    ) -> dict[str, Any]:
         return await scroll_quake_service(
             query=query,
             size=size,
@@ -428,16 +433,14 @@ def register_quake_tools(server: FastMCP) -> None:
             "Get Quake service aggregation fields with /api/v3/aggregation/quake_service. "
             f"Examples: {QUAKE_AGGREGATION_FIELDS}."
         ),
-        structured_output=False,
     )
-    async def quake_aggregation_fields() -> str:
+    async def quake_aggregation_fields() -> dict[str, Any]:
         return await get_quake_aggregation_fields()
 
     @server.tool(
         name="quake_service_aggregation",
         title="Quake Service Aggregation",
         description="Run Quake service aggregation query with /api/v3/aggregation/quake_service.",
-        structured_output=False,
     )
     async def quake_service_aggregation(
         query: Annotated[str, Field(description='Quake query, for example country:"China".')],
@@ -449,7 +452,7 @@ def register_quake_tools(server: FastMCP) -> None:
         latest: Annotated[bool, Field(description="Whether to use latest data.")] = True,
         start_time: Annotated[str | None, Field(description="UTC start time, for example 2020-10-14 00:00:00.")] = None,
         end_time: Annotated[str | None, Field(description="UTC end time, for example 2020-10-14 00:00:00.")] = None,
-    ) -> str:
+    ) -> dict[str, Any]:
         return await aggregate_quake_service(
             query=query,
             aggregation_list=aggregation_list,
@@ -469,7 +472,9 @@ def create_server() -> FastMCP:
         "quake-mcp",
         instructions="Use Quake tools for 360 Quake user, service search, scroll, and aggregation APIs.",
     )
+    apply_server_metadata(server)
     register_quake_tools(server)
+    register_reference_resources(server, ("quake-syntax", "quake-api"))
     return server
 
 

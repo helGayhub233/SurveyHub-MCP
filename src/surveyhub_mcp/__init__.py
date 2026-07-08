@@ -1,3 +1,3 @@
-"""MCP server for FOFA, Quake, Hunter, and ZoomEye cyberspace mapping platforms."""
+"""MCP server for FOFA, Quake, Hunter, ZoomEye, and DayDayMap platforms."""
 
-__version__ = "1.0.1"
+__version__ = "1.15.0"
