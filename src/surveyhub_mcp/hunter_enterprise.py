@@ -3,20 +3,23 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
 from .common import (
     AsyncRateLimiter,
+    apply_server_metadata,
     encode_base64_url,
+    error_payload,
     missing_any_env_message,
     normalize_hunter_query,
     platform_env,
     request_download,
     request_json,
 )
+from .reference import register_reference_resources
 
 HUNTER_BASE_URL = "https://hunter.qianxin.com"
 HUNTER_KEY_URL = "https://hunter.qianxin.com -> Personal Center -> API Management"
@@ -36,7 +39,7 @@ def _hunter_key() -> str | None:
     return platform_env(*HUNTER_ENTERPRISE_ENV)[1]
 
 
-def _missing_key() -> str:
+def _missing_key() -> dict[str, Any]:
     return missing_any_env_message(
         platform="Hunter Enterprise",
         env_vars=HUNTER_ENTERPRISE_ENV,
@@ -84,7 +87,7 @@ async def search_hunter_enterprise(
     start_time: str | None = None,
     end_time: str | None = None,
     exact_search: bool = True,
-) -> str:
+) -> dict[str, Any]:
     """Call Hunter enterprise /openApi/search."""
     if not _hunter_key():
         return _missing_key()
@@ -128,12 +131,16 @@ async def create_hunter_enterprise_batch_task(
     search_type: Literal["all", "ip", "domain", "company"] = "all",
     assets_limit: int | None = None,
     exact_search: bool = True,
-) -> str:
+) -> dict[str, Any]:
     """Create a Hunter enterprise batch search task."""
     if not _hunter_key():
         return _missing_key()
     if bool(query) == bool(file_path):
-        return "Provide exactly one of query or file_path for Hunter batch search."
+        return error_payload(
+            platform="Hunter Enterprise",
+            message="Provide exactly one of query or file_path for Hunter batch search.",
+            error_type="validation_error",
+        )
 
     params: dict[str, str | int] = {**_auth_params()}
     if query:
@@ -153,7 +160,12 @@ async def create_hunter_enterprise_batch_task(
     if file_path:
         path = Path(file_path).expanduser()
         if not path.is_file():
-            return f"File not found: {path}"
+            return error_payload(
+                platform="Hunter Enterprise",
+                message=f"File not found: {path}",
+                error_type="file_not_found",
+                details={"path": str(path)},
+            )
         with path.open("rb") as file_obj:
             return await request_json(
                 platform="Hunter Enterprise",
@@ -177,7 +189,7 @@ async def create_hunter_enterprise_batch_task(
     )
 
 
-async def get_hunter_enterprise_batch_status(*, task_id: str) -> str:
+async def get_hunter_enterprise_batch_status(*, task_id: str) -> dict[str, Any]:
     """Get Hunter enterprise batch task progress."""
     if not _hunter_key():
         return _missing_key()
@@ -193,7 +205,7 @@ async def get_hunter_enterprise_batch_status(*, task_id: str) -> str:
     )
 
 
-async def download_hunter_enterprise_batch_file(*, task_id: str, output_path: str) -> str:
+async def download_hunter_enterprise_batch_file(*, task_id: str, output_path: str) -> dict[str, Any]:
     """Download Hunter enterprise batch export file."""
     if not _hunter_key():
         return _missing_key()
@@ -215,7 +227,7 @@ async def pull_hunter_enterprise_batch_results(
     task_id: str,
     page: int = 1,
     page_size: Literal[100, 200, 500, 1000] = 500,
-) -> str:
+) -> dict[str, Any]:
     """Pull Hunter enterprise batch task result data as JSON."""
     if not _hunter_key():
         return _missing_key()
@@ -238,7 +250,7 @@ async def pull_hunter_enterprise_batch_results(
     )
 
 
-async def get_hunter_enterprise_user_info() -> str:
+async def get_hunter_enterprise_user_info() -> dict[str, Any]:
     """Get Hunter enterprise account information."""
     if not _hunter_key():
         return _missing_key()
@@ -261,7 +273,6 @@ def register_hunter_enterprise_tools(server: FastMCP) -> None:
         name="hunter_enterprise_search",
         title="Hunter Enterprise Search",
         description=f"Search Hunter enterprise API /openApi/search. Enterprise fields: {HUNTER_ENTERPRISE_FIELDS}.",
-        structured_output=False,
     )
     async def hunter_enterprise_search(
         query: Annotated[str, Field(description='Hunter query, for example web.title="login".')],
@@ -276,7 +287,7 @@ def register_hunter_enterprise_tools(server: FastMCP) -> None:
             bool,
             Field(description='Convert Hunter field="value" fuzzy comparisons to field=="value" exact comparisons by default.'),
         ] = True,
-    ) -> str:
+    ) -> dict[str, Any]:
         return await search_hunter_enterprise(
             query=query,
             page=page,
@@ -293,7 +304,6 @@ def register_hunter_enterprise_tools(server: FastMCP) -> None:
         name="hunter_enterprise_batch_create",
         title="Hunter Enterprise Batch Create",
         description="Create a Hunter enterprise batch search task with query or CSV file upload.",
-        structured_output=False,
     )
     async def hunter_enterprise_batch_create(
         query: Annotated[str | None, Field(description="Hunter query. Required if file_path is not provided.")] = None,
@@ -312,7 +322,7 @@ def register_hunter_enterprise_tools(server: FastMCP) -> None:
             bool,
             Field(description='For query mode, convert Hunter field="value" fuzzy comparisons to field=="value" exact comparisons by default.'),
         ] = True,
-    ) -> str:
+    ) -> dict[str, Any]:
         return await create_hunter_enterprise_batch_task(
             query=query,
             file_path=file_path,
@@ -330,36 +340,33 @@ def register_hunter_enterprise_tools(server: FastMCP) -> None:
         name="hunter_enterprise_batch_status",
         title="Hunter Enterprise Batch Status",
         description="Get Hunter enterprise batch task progress.",
-        structured_output=False,
     )
     async def hunter_enterprise_batch_status(
         task_id: Annotated[str, Field(description="Task ID returned by hunter_enterprise_batch_create.")],
-    ) -> str:
+    ) -> dict[str, Any]:
         return await get_hunter_enterprise_batch_status(task_id=task_id)
 
     @server.tool(
         name="hunter_enterprise_batch_download",
         title="Hunter Enterprise Batch Download",
         description="Download Hunter enterprise batch task export file to output_path.",
-        structured_output=False,
     )
     async def hunter_enterprise_batch_download(
         task_id: Annotated[str, Field(description="Task ID returned by hunter_enterprise_batch_create.")],
         output_path: Annotated[str, Field(description="Local output CSV path.")],
-    ) -> str:
+    ) -> dict[str, Any]:
         return await download_hunter_enterprise_batch_file(task_id=task_id, output_path=output_path)
 
     @server.tool(
         name="hunter_enterprise_batch_pull",
         title="Hunter Enterprise Batch Pull",
         description="Pull Hunter enterprise batch task results as JSON. Enterprise-only.",
-        structured_output=False,
     )
     async def hunter_enterprise_batch_pull(
         task_id: Annotated[str, Field(description="Task ID returned by hunter_enterprise_batch_create.")],
         page: Annotated[int, Field(ge=1, description="Page number.")] = 1,
         page_size: Annotated[Literal[100, 200, 500, 1000], Field(description="Results per page.")] = 500,
-    ) -> str:
+    ) -> dict[str, Any]:
         return await pull_hunter_enterprise_batch_results(
             task_id=task_id,
             page=page,
@@ -370,9 +377,8 @@ def register_hunter_enterprise_tools(server: FastMCP) -> None:
         name="hunter_enterprise_user_info",
         title="Hunter Enterprise User Info",
         description="Get Hunter enterprise or sub-account quota and account information.",
-        structured_output=False,
     )
-    async def hunter_enterprise_user_info() -> str:
+    async def hunter_enterprise_user_info() -> dict[str, Any]:
         return await get_hunter_enterprise_user_info()
 
 
@@ -382,7 +388,9 @@ def create_server() -> FastMCP:
         "hunter-enterprise-mcp",
         instructions="Use Hunter enterprise tools for enterprise-account Hunter APIs.",
     )
+    apply_server_metadata(server)
     register_hunter_enterprise_tools(server)
+    register_reference_resources(server, ("hunter-syntax", "hunter-enterprise-api"))
     return server
 
 

@@ -5,6 +5,7 @@
 <p align="center">
   <img src="https://img.shields.io/pypi/v/surveyhub-mcp?label=PyPI&color=3775A9" alt="PyPI 版本"/>
   <img src="https://img.shields.io/badge/Python-%3E%3D3.10-3776AB" alt="Python >=3.10"/>
+  <img src="https://img.shields.io/badge/MCP%20SDK-%3E%3D1.28.0-6F42C1" alt="MCP SDK >=1.28.0"/>
   <img src="https://img.shields.io/pypi/dm/surveyhub-mcp?label=Downloads&color=2EA44F" alt="PyPI 下载量"/>
   <img src="https://img.shields.io/github/license/helGayhub233/SurveyHub-MCP?label=License&color=blue" alt="许可证"/>
 </p>
@@ -23,7 +24,7 @@
 
 ### 通过 pip 安装
 
-要求 Python `>=3.10`。用户无需 clone 源码，可直接从 PyPI 安装：
+要求 Python `>=3.10`，MCP Python SDK `>=1.28.0`。用户无需 clone 源码，可直接从 PyPI 安装：
 
 ```bash
 python -m pip install -U surveyhub-mcp
@@ -224,6 +225,23 @@ API Key 获取入口：
 | `hunter_enterprise_user_info` | Hunter 企业版 | 账号信息 |
 | `daydaymap_search` | DayDayMap | 资产搜索 |
 
+工具返回结构化结果：成功时包含 `ok=true`、`platform` 和 `data` 或 `text`；失败时包含 `ok=false`、`platform` 和 `error`，便于 MCP 客户端区分业务错误、鉴权错误、限流、超时和参数校验失败。
+
+## MCP Resources 和 Prompts
+
+服务会暴露查询语法和 API 文档资源，URI 前缀为 `surveyhub://reference/`，例如：
+
+- `surveyhub://reference/fofa-syntax`
+- `surveyhub://reference/quake-syntax`
+- `surveyhub://reference/hunter-syntax`
+- `surveyhub://reference/zoomeye-syntax`
+- `surveyhub://reference/daydaymap-api`
+
+聚合入口额外提供两个 Prompt：
+
+- `surveyhub_search_plan`：根据目标和平台生成资产搜索计划
+- `surveyhub_query_help`：检查并优化指定平台查询语句
+
 ## 请求限制
 
 项目会对可在本地判断的参数做校验或节流。账号等级、积分额度、CSV 文件内容等仍以平台返回为准。
@@ -274,6 +292,7 @@ src/
     hunter_personal.py    # Hunter 个人版工具
     hunter_enterprise.py  # Hunter 企业版工具
     daydaymap.py          # DayDayMap 工具
+    reference.py          # MCP resources 和 prompts
     common.py             # 共享编码、HTTP、错误处理和节流工具
 ```
 

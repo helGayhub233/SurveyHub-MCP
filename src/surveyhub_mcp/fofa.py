@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 from urllib.parse import quote
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
-from .common import AsyncRateLimiter, encode_base64, missing_env_message, platform_key, request_json, split_csv
+from .common import AsyncRateLimiter, apply_server_metadata, encode_base64, error_payload, missing_env_message, platform_key, request_json, split_csv
+from .reference import register_reference_resources
 
 FOFA_BASE_URL = "https://fofa.info"
 FOFA_KEY_URL = "https://fofa.info -> Personal Center -> API Key"
@@ -37,7 +38,7 @@ def _fofa_key() -> str | None:
     return platform_key("FOFA_KEY")
 
 
-def _missing_key() -> str:
+def _missing_key() -> dict[str, Any]:
     return missing_env_message(
         platform="FOFA",
         env_var="FOFA_KEY",
@@ -58,12 +59,22 @@ def _add_fofa_auth(params: dict[str, str | int | bool]) -> dict[str, str | int |
     return params
 
 
-def _validate_search_size(*, fields: str, size: int) -> str | None:
+def _validate_search_size(*, fields: str, size: int) -> dict[str, Any] | None:
     requested_fields = set(split_csv(fields) or [])
     if "body" in requested_fields and size > 500:
-        return 'FOFA search size must be <= 500 when fields includes "body".'
+        return error_payload(
+            platform="FOFA",
+            message='FOFA search size must be <= 500 when fields includes "body".',
+            error_type="validation_error",
+            details={"fields": fields, "size": size},
+        )
     if requested_fields.intersection({"cert", "banner"}) and size > 2000:
-        return 'FOFA search size must be <= 2000 when fields includes "cert" or "banner".'
+        return error_payload(
+            platform="FOFA",
+            message='FOFA search size must be <= 2000 when fields includes "cert" or "banner".',
+            error_type="validation_error",
+            details={"fields": fields, "size": size},
+        )
     return None
 
 
@@ -75,7 +86,7 @@ async def search_fofa(
     fields: str = "host,ip,port,domain,title",
     full: bool = False,
     r_type: str = "json",
-) -> str:
+) -> dict[str, Any]:
     """Call FOFA normal page-based search API."""
     if not _fofa_key():
         return _missing_key()
@@ -112,7 +123,7 @@ async def search_fofa_next(
     fields: str = "host,ip,port,domain,title",
     full: bool = False,
     r_type: str = "json",
-) -> str:
+) -> dict[str, Any]:
     """Call FOFA continuous pagination API."""
     if not _fofa_key():
         return _missing_key()
@@ -142,7 +153,7 @@ async def search_fofa_next(
     )
 
 
-async def search_fofa_stats(*, query: str, fields: str = "protocol,domain,port") -> str:
+async def search_fofa_stats(*, query: str, fields: str = "protocol,domain,port") -> dict[str, Any]:
     """Call FOFA statistics aggregation API."""
     if not _fofa_key():
         return _missing_key()
@@ -160,7 +171,7 @@ async def search_fofa_stats(*, query: str, fields: str = "protocol,domain,port")
     )
 
 
-async def get_fofa_host(*, host: str, detail: bool = False) -> str:
+async def get_fofa_host(*, host: str, detail: bool = False) -> dict[str, Any]:
     """Call FOFA host aggregation API."""
     if not _fofa_key():
         return _missing_key()
@@ -178,7 +189,7 @@ async def get_fofa_host(*, host: str, detail: bool = False) -> str:
     )
 
 
-async def get_fofa_user_info() -> str:
+async def get_fofa_user_info() -> dict[str, Any]:
     """Call FOFA account information API."""
     if not _fofa_key():
         return _missing_key()
@@ -205,7 +216,6 @@ def register_fofa_tools(server: FastMCP) -> None:
             "Search FOFA assets with /api/v1/search/all. Query is encoded as qbase64. "
             f"Supported fields include: {FOFA_SEARCH_FIELDS}."
         ),
-        structured_output=False,
     )
     async def fofa_search(
         query: Annotated[
@@ -217,7 +227,7 @@ def register_fofa_tools(server: FastMCP) -> None:
         fields: Annotated[str, Field(description="Comma-separated return fields.")] = "host,ip,port,domain,title",
         full: Annotated[bool, Field(description="Set true to search all data instead of one-year data.")] = False,
         r_type: Annotated[str, Field(description='Response type. Use "json" for JSON responses.')] = "json",
-    ) -> str:
+    ) -> dict[str, Any]:
         return await search_fofa(
             query=query,
             size=size,
@@ -234,7 +244,6 @@ def register_fofa_tools(server: FastMCP) -> None:
             "Search FOFA assets with /api/v1/search/next. Use returned next value "
             "for stable continuous pagination over a large result set."
         ),
-        structured_output=False,
     )
     async def fofa_search_next(
         query: Annotated[str, Field(description="FOFA query to encode as qbase64.")],
@@ -243,7 +252,7 @@ def register_fofa_tools(server: FastMCP) -> None:
         fields: Annotated[str, Field(description="Comma-separated return fields.")] = "host,ip,port,domain,title",
         full: Annotated[bool, Field(description="Set true to search all data instead of one-year data.")] = False,
         r_type: Annotated[str, Field(description='Response type. Use "json" for JSON responses.')] = "json",
-    ) -> str:
+    ) -> dict[str, Any]:
         return await search_fofa_next(
             query=query,
             size=size,
@@ -261,7 +270,6 @@ def register_fofa_tools(server: FastMCP) -> None:
             "Calls are throttled to one request every 5 seconds in this MCP process. "
             f"Supported fields: {FOFA_STATS_FIELDS}."
         ),
-        structured_output=False,
     )
     async def fofa_search_stats(
         query: Annotated[str, Field(description="FOFA query to encode as qbase64.")],
@@ -269,7 +277,7 @@ def register_fofa_tools(server: FastMCP) -> None:
             str,
             Field(description="Comma-separated aggregation fields, for example protocol,domain,port."),
         ] = "protocol,domain,port",
-    ) -> str:
+    ) -> dict[str, Any]:
         return await search_fofa_stats(query=query, fields=fields)
 
     @server.tool(
@@ -279,21 +287,19 @@ def register_fofa_tools(server: FastMCP) -> None:
             "Get FOFA host aggregation data with /api/v1/host/{host}. "
             "Calls are throttled to one request every 1 second in this MCP process."
         ),
-        structured_output=False,
     )
     async def fofa_host(
         host: Annotated[str, Field(description="Host name or IP address, usually an IP.")],
         detail: Annotated[bool, Field(description="Set true to include port product details.")] = False,
-    ) -> str:
+    ) -> dict[str, Any]:
         return await get_fofa_host(host=host, detail=detail)
 
     @server.tool(
         name="fofa_user_info",
         title="FOFA User Info",
         description="Get FOFA account status, quota, and membership information with /api/v1/info/my.",
-        structured_output=False,
     )
-    async def fofa_user_info() -> str:
+    async def fofa_user_info() -> dict[str, Any]:
         return await get_fofa_user_info()
 
 
@@ -303,7 +309,9 @@ def create_server() -> FastMCP:
         "fofa-mcp",
         instructions="Use FOFA tools for FOFA cyberspace asset search and account APIs.",
     )
+    apply_server_metadata(server)
     register_fofa_tools(server)
+    register_reference_resources(server, ("fofa-syntax", "fofa-api"))
     return server
 
 

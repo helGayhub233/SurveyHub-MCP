@@ -3,20 +3,23 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
 from .common import (
     AsyncRateLimiter,
+    apply_server_metadata,
     encode_base64_url,
+    error_payload,
     missing_any_env_message,
     normalize_hunter_query,
     platform_env,
     request_download,
     request_json,
 )
+from .reference import register_reference_resources
 
 HUNTER_BASE_URL = "https://hunter.qianxin.com"
 HUNTER_KEY_URL = "https://hunter.qianxin.com -> Personal Center -> API Management"
@@ -36,7 +39,7 @@ def _hunter_key() -> str | None:
     return platform_env(*HUNTER_PERSONAL_ENV)[1]
 
 
-def _missing_key() -> str:
+def _missing_key() -> dict[str, Any]:
     return missing_any_env_message(
         platform="Hunter Personal",
         env_vars=HUNTER_PERSONAL_ENV,
@@ -84,7 +87,7 @@ async def search_hunter_personal(
     start_time: str | None = None,
     end_time: str | None = None,
     exact_search: bool = True,
-) -> str:
+) -> dict[str, Any]:
     """Call Hunter personal /openApi/search."""
     if not _hunter_key():
         return _missing_key()
@@ -128,12 +131,16 @@ async def create_hunter_personal_batch_task(
     search_type: Literal["all", "ip", "domain", "company"] = "all",
     assets_limit: int | None = None,
     exact_search: bool = True,
-) -> str:
+) -> dict[str, Any]:
     """Create a Hunter personal batch search task."""
     if not _hunter_key():
         return _missing_key()
     if bool(query) == bool(file_path):
-        return "Provide exactly one of query or file_path for Hunter batch search."
+        return error_payload(
+            platform="Hunter Personal",
+            message="Provide exactly one of query or file_path for Hunter batch search.",
+            error_type="validation_error",
+        )
 
     params: dict[str, str | int] = {**_auth_params()}
     if query:
@@ -153,7 +160,12 @@ async def create_hunter_personal_batch_task(
     if file_path:
         path = Path(file_path).expanduser()
         if not path.is_file():
-            return f"File not found: {path}"
+            return error_payload(
+                platform="Hunter Personal",
+                message=f"File not found: {path}",
+                error_type="file_not_found",
+                details={"path": str(path)},
+            )
         with path.open("rb") as file_obj:
             return await request_json(
                 platform="Hunter Personal",
@@ -177,7 +189,7 @@ async def create_hunter_personal_batch_task(
     )
 
 
-async def get_hunter_personal_batch_status(*, task_id: str) -> str:
+async def get_hunter_personal_batch_status(*, task_id: str) -> dict[str, Any]:
     """Get Hunter personal batch task progress."""
     if not _hunter_key():
         return _missing_key()
@@ -193,7 +205,7 @@ async def get_hunter_personal_batch_status(*, task_id: str) -> str:
     )
 
 
-async def download_hunter_personal_batch_file(*, task_id: str, output_path: str) -> str:
+async def download_hunter_personal_batch_file(*, task_id: str, output_path: str) -> dict[str, Any]:
     """Download Hunter personal batch export file."""
     if not _hunter_key():
         return _missing_key()
@@ -210,7 +222,7 @@ async def download_hunter_personal_batch_file(*, task_id: str, output_path: str)
     )
 
 
-async def get_hunter_personal_user_info() -> str:
+async def get_hunter_personal_user_info() -> dict[str, Any]:
     """Get Hunter personal account information."""
     if not _hunter_key():
         return _missing_key()
@@ -233,7 +245,6 @@ def register_hunter_personal_tools(server: FastMCP) -> None:
         name="hunter_personal_search",
         title="Hunter Personal Search",
         description=f"Search Hunter personal API /openApi/search. Personal fields: {HUNTER_PERSONAL_FIELDS}.",
-        structured_output=False,
     )
     async def hunter_personal_search(
         query: Annotated[str, Field(description='Hunter query, for example web.title="login".')],
@@ -248,7 +259,7 @@ def register_hunter_personal_tools(server: FastMCP) -> None:
             bool,
             Field(description='Convert Hunter field="value" fuzzy comparisons to field=="value" exact comparisons by default.'),
         ] = True,
-    ) -> str:
+    ) -> dict[str, Any]:
         return await search_hunter_personal(
             query=query,
             page=page,
@@ -265,7 +276,6 @@ def register_hunter_personal_tools(server: FastMCP) -> None:
         name="hunter_personal_batch_create",
         title="Hunter Personal Batch Create",
         description="Create a Hunter personal batch search task with query or CSV file upload.",
-        structured_output=False,
     )
     async def hunter_personal_batch_create(
         query: Annotated[str | None, Field(description="Hunter query. Required if file_path is not provided.")] = None,
@@ -284,7 +294,7 @@ def register_hunter_personal_tools(server: FastMCP) -> None:
             bool,
             Field(description='For query mode, convert Hunter field="value" fuzzy comparisons to field=="value" exact comparisons by default.'),
         ] = True,
-    ) -> str:
+    ) -> dict[str, Any]:
         return await create_hunter_personal_batch_task(
             query=query,
             file_path=file_path,
@@ -302,32 +312,29 @@ def register_hunter_personal_tools(server: FastMCP) -> None:
         name="hunter_personal_batch_status",
         title="Hunter Personal Batch Status",
         description="Get Hunter personal batch task progress.",
-        structured_output=False,
     )
     async def hunter_personal_batch_status(
         task_id: Annotated[str, Field(description="Task ID returned by hunter_personal_batch_create.")],
-    ) -> str:
+    ) -> dict[str, Any]:
         return await get_hunter_personal_batch_status(task_id=task_id)
 
     @server.tool(
         name="hunter_personal_batch_download",
         title="Hunter Personal Batch Download",
         description="Download Hunter personal batch task export file to output_path.",
-        structured_output=False,
     )
     async def hunter_personal_batch_download(
         task_id: Annotated[str, Field(description="Task ID returned by hunter_personal_batch_create.")],
         output_path: Annotated[str, Field(description="Local output CSV path.")],
-    ) -> str:
+    ) -> dict[str, Any]:
         return await download_hunter_personal_batch_file(task_id=task_id, output_path=output_path)
 
     @server.tool(
         name="hunter_personal_user_info",
         title="Hunter Personal User Info",
         description="Get Hunter personal account quota and account information.",
-        structured_output=False,
     )
-    async def hunter_personal_user_info() -> str:
+    async def hunter_personal_user_info() -> dict[str, Any]:
         return await get_hunter_personal_user_info()
 
 
@@ -337,7 +344,9 @@ def create_server() -> FastMCP:
         "hunter-personal-mcp",
         instructions="Use Hunter personal tools for personal-account Hunter APIs.",
     )
+    apply_server_metadata(server)
     register_hunter_personal_tools(server)
+    register_reference_resources(server, ("hunter-syntax", "hunter-personal-api"))
     return server
 
 

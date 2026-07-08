@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-import json
 import os
-from typing import Annotated
+from typing import Annotated, Any
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
-from .common import encode_base64, missing_env_message, platform_key, request_json
+from .common import apply_server_metadata, encode_base64, error_payload, missing_env_message, platform_key, request_json
+from .reference import register_reference_resources
 
 DAYDAYMAP_BASE_URL = "https://www.daydaymap.com"
 DAYDAYMAP_KEY_URL = "https://www.daydaymap.com -> 个人中心 -> 个人信息 -> 复制 API KEY"
@@ -50,7 +50,7 @@ def _daydaymap_key() -> str | None:
     return platform_key("DAYDAYMAP_API_KEY")
 
 
-def _missing_key() -> str:
+def _missing_key() -> dict[str, Any]:
     return missing_env_message(
         platform="DayDayMap",
         env_var="DAYDAYMAP_API_KEY",
@@ -72,7 +72,7 @@ async def search_daydaymap(
     page_size: int = 10,
     fields: str | None = None,
     exclude_fields: str | None = None,
-) -> str:
+) -> dict[str, Any]:
     """Call DayDayMap search API with application-level error handling."""
     if not _daydaymap_key():
         return _missing_key()
@@ -87,7 +87,7 @@ async def search_daydaymap(
     if exclude_fields and not fields:
         payload["exclude_fields"] = exclude_fields
 
-    raw = await request_json(
+    result = await request_json(
         platform="DayDayMap",
         method="POST",
         url=f"{DAYDAYMAP_BASE_URL}/api/v1/raymap/search/all",
@@ -97,17 +97,24 @@ async def search_daydaymap(
         forbidden_hint="Access forbidden. Your DayDayMap account may not have sufficient permissions.",
     )
 
-    try:
-        data = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        return raw
+    if not result.get("ok"):
+        return result
+
+    data = result.get("data")
+    if not isinstance(data, dict):
+        return result
 
     code = data.get("code")
     if code != 200:
         message = DAYDAYMAP_ERROR_CODES.get(code, f"未知错误 (code={code})")
-        return f"DayDayMap API 错误 (code={code}): {data.get('msg', message)}"
+        return error_payload(
+            platform="DayDayMap",
+            message=f"DayDayMap API 错误 (code={code}): {data.get('msg', message)}",
+            error_type="api_error",
+            details={"code": code},
+        )
 
-    return raw
+    return result
 
 
 def register_daydaymap_tools(server: FastMCP) -> None:
@@ -124,7 +131,6 @@ def register_daydaymap_tools(server: FastMCP) -> None:
             f"Query syntax categories: {DAYDAYMAP_QUERY_CATEGORIES}. "
             "Logical AND uses &&. Maximum 10,000 results total (page x page_size <= 10000)."
         ),
-        structured_output=False,
     )
     async def daydaymap_search(
         query: Annotated[
@@ -152,7 +158,7 @@ def register_daydaymap_tools(server: FastMCP) -> None:
             str | None,
             Field(description="Comma-separated fields to exclude from response. Only effective when fields is not set."),
         ] = None,
-    ) -> str:
+    ) -> dict[str, Any]:
         return await search_daydaymap(
             query=query,
             page=page,
@@ -168,7 +174,9 @@ def create_server() -> FastMCP:
         "daydaymap-mcp",
         instructions="Use DayDayMap tools for cyberspace asset search APIs.",
     )
+    apply_server_metadata(server)
     register_daydaymap_tools(server)
+    register_reference_resources(server, ("daydaymap-api",))
     return server
 
 
