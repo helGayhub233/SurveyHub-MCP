@@ -5,7 +5,7 @@
 <p align="center">
   <img src="https://img.shields.io/pypi/v/surveyhub-mcp?label=PyPI&color=3775A9" alt="PyPI 版本"/>
   <img src="https://img.shields.io/badge/Python-%3E%3D3.10-3776AB" alt="Python >=3.10"/>
-  <img src="https://img.shields.io/badge/MCP%20SDK-%3E%3D1.28.0-6F42C1" alt="MCP SDK >=1.28.0"/>
+  <img src="https://img.shields.io/badge/MCP%20SDK-%3E%3D1.28.1-6F42C1" alt="MCP SDK >=1.28.1"/>
   <img src="https://img.shields.io/pypi/dm/surveyhub-mcp?label=Downloads&color=2EA44F" alt="PyPI 下载量"/>
   <img src="https://img.shields.io/github/license/helGayhub233/SurveyHub-MCP?label=License&color=blue" alt="许可证"/>
 </p>
@@ -24,7 +24,7 @@
 
 ### 通过 pip 安装
 
-要求 Python `>=3.10`，MCP Python SDK `>=1.28.0`。用户无需 clone 源码，可直接从 PyPI 安装：
+要求 Python `>=3.10`，MCP Python SDK `>=1.28.1`。用户无需 clone 源码，可直接从 PyPI 安装：
 
 ```bash
 python -m pip install -U surveyhub-mcp
@@ -305,6 +305,8 @@ uv build --wheel
 ```
 
 ## 注意事项
+
+**本项目仅供学习和技术研究使用，严禁用于任何商业或非法用途。**
 
 请只在合法授权范围内使用本项目，并遵守各平台的 API 服务条款和额度限制。
 
