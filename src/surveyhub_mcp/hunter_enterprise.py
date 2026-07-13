@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import CallToolResult
 from pydantic import Field
 
 from .common import (
@@ -14,6 +15,7 @@ from .common import (
     encode_base64_url,
     error_payload,
     missing_any_env_message,
+    mcp_tool_result,
     normalize_hunter_query,
     platform_env,
     request_download,
@@ -32,7 +34,11 @@ HUNTER_ENTERPRISE_FIELDS = (
     "component,asset_tag,updated_at,header,header_server,banner,whois,body,vul_list"
 )
 
-HE_RATE_LIMITER = AsyncRateLimiter(1.0)
+HE_RATE_LIMITER = AsyncRateLimiter(
+    1.0,
+    namespace="hunter-enterprise",
+    identity_provider=lambda: _hunter_key(),
+)
 
 
 def _hunter_key() -> str | None:
@@ -113,6 +119,7 @@ async def search_hunter_enterprise(
         method="GET",
         url=f"{HUNTER_BASE_URL}/openApi/search",
         rate_limiter=HE_RATE_LIMITER,
+        retryable_body_codes={429},
         params=params,
         auth_hint="Authentication failed. Check HUNTER_ENTERPRISE_KEY or HUNTER_KEY.",
         forbidden_hint="Access forbidden. Your Hunter enterprise account may not have sufficient permissions or credits.",
@@ -172,6 +179,7 @@ async def create_hunter_enterprise_batch_task(
                 method="POST",
                 url=f"{HUNTER_BASE_URL}/openApi/search/batch",
                 rate_limiter=HE_RATE_LIMITER,
+                retryable_body_codes={429},
                 params=params,
                 files={"file": (path.name, file_obj, "text/csv")},
                 auth_hint="Authentication failed. Check HUNTER_ENTERPRISE_KEY or HUNTER_KEY.",
@@ -183,6 +191,7 @@ async def create_hunter_enterprise_batch_task(
         method="POST",
         url=f"{HUNTER_BASE_URL}/openApi/search/batch",
         rate_limiter=HE_RATE_LIMITER,
+        retryable_body_codes={429},
         params=params,
         auth_hint="Authentication failed. Check HUNTER_ENTERPRISE_KEY or HUNTER_KEY.",
         forbidden_hint="Access forbidden. Your Hunter enterprise account may not have sufficient permissions or credits.",
@@ -199,6 +208,7 @@ async def get_hunter_enterprise_batch_status(*, task_id: str) -> dict[str, Any]:
         method="GET",
         url=f"{HUNTER_BASE_URL}/openApi/search/batch/{task_id}",
         rate_limiter=HE_RATE_LIMITER,
+        retryable_body_codes={429},
         params=_auth_params(),
         auth_hint="Authentication failed. Check HUNTER_ENTERPRISE_KEY or HUNTER_KEY.",
         forbidden_hint="Access forbidden. Your Hunter enterprise account may not have sufficient permissions or credits.",
@@ -216,6 +226,7 @@ async def download_hunter_enterprise_batch_file(*, task_id: str, output_path: st
         url=f"{HUNTER_BASE_URL}/openApi/search/download/{task_id}",
         output_path=output_path,
         rate_limiter=HE_RATE_LIMITER,
+        retryable_body_codes={429},
         params=_auth_params(),
         auth_hint="Authentication failed. Check HUNTER_ENTERPRISE_KEY or HUNTER_KEY.",
         forbidden_hint="Access forbidden. Your Hunter enterprise account may not have sufficient permissions or credits.",
@@ -244,6 +255,7 @@ async def pull_hunter_enterprise_batch_results(
         method="GET",
         url=f"{HUNTER_BASE_URL}/openApi/search/batch/pull",
         rate_limiter=HE_RATE_LIMITER,
+        retryable_body_codes={429},
         params=params,
         auth_hint="Authentication failed. Check HUNTER_ENTERPRISE_KEY or HUNTER_KEY.",
         forbidden_hint="Access forbidden. Your Hunter enterprise account may not have sufficient permissions or credits.",
@@ -260,6 +272,7 @@ async def get_hunter_enterprise_user_info() -> dict[str, Any]:
         method="GET",
         url=f"{HUNTER_BASE_URL}/openApi/userInfo",
         rate_limiter=HE_RATE_LIMITER,
+        retryable_body_codes={429},
         params=_auth_params(),
         auth_hint="Authentication failed. Check HUNTER_ENTERPRISE_KEY or HUNTER_KEY.",
         forbidden_hint="Access forbidden. Your Hunter enterprise account may not have sufficient permissions or credits.",
@@ -287,8 +300,8 @@ def register_hunter_enterprise_tools(server: FastMCP) -> None:
             bool,
             Field(description='Convert Hunter field="value" fuzzy comparisons to field=="value" exact comparisons by default.'),
         ] = True,
-    ) -> dict[str, Any]:
-        return await search_hunter_enterprise(
+    ) -> CallToolResult:
+        return mcp_tool_result(await search_hunter_enterprise(
             query=query,
             page=page,
             page_size=page_size,
@@ -298,7 +311,7 @@ def register_hunter_enterprise_tools(server: FastMCP) -> None:
             start_time=start_time,
             end_time=end_time,
             exact_search=exact_search,
-        )
+        ))
 
     @server.tool(
         name="hunter_enterprise_batch_create",
@@ -322,8 +335,8 @@ def register_hunter_enterprise_tools(server: FastMCP) -> None:
             bool,
             Field(description='For query mode, convert Hunter field="value" fuzzy comparisons to field=="value" exact comparisons by default.'),
         ] = True,
-    ) -> dict[str, Any]:
-        return await create_hunter_enterprise_batch_task(
+    ) -> CallToolResult:
+        return mcp_tool_result(await create_hunter_enterprise_batch_task(
             query=query,
             file_path=file_path,
             start_time=start_time,
@@ -334,7 +347,7 @@ def register_hunter_enterprise_tools(server: FastMCP) -> None:
             search_type=search_type,
             assets_limit=assets_limit,
             exact_search=exact_search,
-        )
+        ))
 
     @server.tool(
         name="hunter_enterprise_batch_status",
@@ -343,8 +356,8 @@ def register_hunter_enterprise_tools(server: FastMCP) -> None:
     )
     async def hunter_enterprise_batch_status(
         task_id: Annotated[str, Field(description="Task ID returned by hunter_enterprise_batch_create.")],
-    ) -> dict[str, Any]:
-        return await get_hunter_enterprise_batch_status(task_id=task_id)
+    ) -> CallToolResult:
+        return mcp_tool_result(await get_hunter_enterprise_batch_status(task_id=task_id))
 
     @server.tool(
         name="hunter_enterprise_batch_download",
@@ -354,8 +367,8 @@ def register_hunter_enterprise_tools(server: FastMCP) -> None:
     async def hunter_enterprise_batch_download(
         task_id: Annotated[str, Field(description="Task ID returned by hunter_enterprise_batch_create.")],
         output_path: Annotated[str, Field(description="Local output CSV path.")],
-    ) -> dict[str, Any]:
-        return await download_hunter_enterprise_batch_file(task_id=task_id, output_path=output_path)
+    ) -> CallToolResult:
+        return mcp_tool_result(await download_hunter_enterprise_batch_file(task_id=task_id, output_path=output_path))
 
     @server.tool(
         name="hunter_enterprise_batch_pull",
@@ -366,20 +379,20 @@ def register_hunter_enterprise_tools(server: FastMCP) -> None:
         task_id: Annotated[str, Field(description="Task ID returned by hunter_enterprise_batch_create.")],
         page: Annotated[int, Field(ge=1, description="Page number.")] = 1,
         page_size: Annotated[Literal[100, 200, 500, 1000], Field(description="Results per page.")] = 500,
-    ) -> dict[str, Any]:
-        return await pull_hunter_enterprise_batch_results(
+    ) -> CallToolResult:
+        return mcp_tool_result(await pull_hunter_enterprise_batch_results(
             task_id=task_id,
             page=page,
             page_size=page_size,
-        )
+        ))
 
     @server.tool(
         name="hunter_enterprise_user_info",
         title="Hunter Enterprise User Info",
         description="Get Hunter enterprise or sub-account quota and account information.",
     )
-    async def hunter_enterprise_user_info() -> dict[str, Any]:
-        return await get_hunter_enterprise_user_info()
+    async def hunter_enterprise_user_info() -> CallToolResult:
+        return mcp_tool_result(await get_hunter_enterprise_user_info())
 
 
 def create_server() -> FastMCP:

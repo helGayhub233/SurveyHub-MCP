@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import CallToolResult
 from pydantic import Field
 
 from .common import (
@@ -14,6 +15,7 @@ from .common import (
     encode_base64_url,
     error_payload,
     missing_any_env_message,
+    mcp_tool_result,
     normalize_hunter_query,
     platform_env,
     request_download,
@@ -32,7 +34,11 @@ HUNTER_PERSONAL_FIELDS = (
     "component,asset_tag,updated_at,header,header_server,banner"
 )
 
-HP_RATE_LIMITER = AsyncRateLimiter(1.0)
+HP_RATE_LIMITER = AsyncRateLimiter(
+    1.0,
+    namespace="hunter-personal",
+    identity_provider=lambda: _hunter_key(),
+)
 
 
 def _hunter_key() -> str | None:
@@ -113,6 +119,7 @@ async def search_hunter_personal(
         method="GET",
         url=f"{HUNTER_BASE_URL}/openApi/search",
         rate_limiter=HP_RATE_LIMITER,
+        retryable_body_codes={429},
         params=params,
         auth_hint="Authentication failed. Check HUNTER_PERSONAL_KEY or HUNTER_KEY.",
         forbidden_hint="Access forbidden. Your Hunter personal account may not have sufficient permissions or credits.",
@@ -172,6 +179,7 @@ async def create_hunter_personal_batch_task(
                 method="POST",
                 url=f"{HUNTER_BASE_URL}/openApi/search/batch",
                 rate_limiter=HP_RATE_LIMITER,
+                retryable_body_codes={429},
                 params=params,
                 files={"file": (path.name, file_obj, "text/csv")},
                 auth_hint="Authentication failed. Check HUNTER_PERSONAL_KEY or HUNTER_KEY.",
@@ -183,6 +191,7 @@ async def create_hunter_personal_batch_task(
         method="POST",
         url=f"{HUNTER_BASE_URL}/openApi/search/batch",
         rate_limiter=HP_RATE_LIMITER,
+        retryable_body_codes={429},
         params=params,
         auth_hint="Authentication failed. Check HUNTER_PERSONAL_KEY or HUNTER_KEY.",
         forbidden_hint="Access forbidden. Your Hunter personal account may not have sufficient permissions or credits.",
@@ -199,6 +208,7 @@ async def get_hunter_personal_batch_status(*, task_id: str) -> dict[str, Any]:
         method="GET",
         url=f"{HUNTER_BASE_URL}/openApi/search/batch/{task_id}",
         rate_limiter=HP_RATE_LIMITER,
+        retryable_body_codes={429},
         params=_auth_params(),
         auth_hint="Authentication failed. Check HUNTER_PERSONAL_KEY or HUNTER_KEY.",
         forbidden_hint="Access forbidden. Your Hunter personal account may not have sufficient permissions or credits.",
@@ -216,6 +226,7 @@ async def download_hunter_personal_batch_file(*, task_id: str, output_path: str)
         url=f"{HUNTER_BASE_URL}/openApi/search/download/{task_id}",
         output_path=output_path,
         rate_limiter=HP_RATE_LIMITER,
+        retryable_body_codes={429},
         params=_auth_params(),
         auth_hint="Authentication failed. Check HUNTER_PERSONAL_KEY or HUNTER_KEY.",
         forbidden_hint="Access forbidden. Your Hunter personal account may not have sufficient permissions or credits.",
@@ -232,6 +243,7 @@ async def get_hunter_personal_user_info() -> dict[str, Any]:
         method="GET",
         url=f"{HUNTER_BASE_URL}/openApi/userInfo",
         rate_limiter=HP_RATE_LIMITER,
+        retryable_body_codes={429},
         params=_auth_params(),
         auth_hint="Authentication failed. Check HUNTER_PERSONAL_KEY or HUNTER_KEY.",
         forbidden_hint="Access forbidden. Your Hunter personal account may not have sufficient permissions or credits.",
@@ -259,8 +271,8 @@ def register_hunter_personal_tools(server: FastMCP) -> None:
             bool,
             Field(description='Convert Hunter field="value" fuzzy comparisons to field=="value" exact comparisons by default.'),
         ] = True,
-    ) -> dict[str, Any]:
-        return await search_hunter_personal(
+    ) -> CallToolResult:
+        return mcp_tool_result(await search_hunter_personal(
             query=query,
             page=page,
             page_size=page_size,
@@ -270,7 +282,7 @@ def register_hunter_personal_tools(server: FastMCP) -> None:
             start_time=start_time,
             end_time=end_time,
             exact_search=exact_search,
-        )
+        ))
 
     @server.tool(
         name="hunter_personal_batch_create",
@@ -294,8 +306,8 @@ def register_hunter_personal_tools(server: FastMCP) -> None:
             bool,
             Field(description='For query mode, convert Hunter field="value" fuzzy comparisons to field=="value" exact comparisons by default.'),
         ] = True,
-    ) -> dict[str, Any]:
-        return await create_hunter_personal_batch_task(
+    ) -> CallToolResult:
+        return mcp_tool_result(await create_hunter_personal_batch_task(
             query=query,
             file_path=file_path,
             start_time=start_time,
@@ -306,7 +318,7 @@ def register_hunter_personal_tools(server: FastMCP) -> None:
             search_type=search_type,
             assets_limit=assets_limit,
             exact_search=exact_search,
-        )
+        ))
 
     @server.tool(
         name="hunter_personal_batch_status",
@@ -315,8 +327,8 @@ def register_hunter_personal_tools(server: FastMCP) -> None:
     )
     async def hunter_personal_batch_status(
         task_id: Annotated[str, Field(description="Task ID returned by hunter_personal_batch_create.")],
-    ) -> dict[str, Any]:
-        return await get_hunter_personal_batch_status(task_id=task_id)
+    ) -> CallToolResult:
+        return mcp_tool_result(await get_hunter_personal_batch_status(task_id=task_id))
 
     @server.tool(
         name="hunter_personal_batch_download",
@@ -326,16 +338,16 @@ def register_hunter_personal_tools(server: FastMCP) -> None:
     async def hunter_personal_batch_download(
         task_id: Annotated[str, Field(description="Task ID returned by hunter_personal_batch_create.")],
         output_path: Annotated[str, Field(description="Local output CSV path.")],
-    ) -> dict[str, Any]:
-        return await download_hunter_personal_batch_file(task_id=task_id, output_path=output_path)
+    ) -> CallToolResult:
+        return mcp_tool_result(await download_hunter_personal_batch_file(task_id=task_id, output_path=output_path))
 
     @server.tool(
         name="hunter_personal_user_info",
         title="Hunter Personal User Info",
         description="Get Hunter personal account quota and account information.",
     )
-    async def hunter_personal_user_info() -> dict[str, Any]:
-        return await get_hunter_personal_user_info()
+    async def hunter_personal_user_info() -> CallToolResult:
+        return mcp_tool_result(await get_hunter_personal_user_info())
 
 
 def create_server() -> FastMCP:
