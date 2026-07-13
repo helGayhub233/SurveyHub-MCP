@@ -2,6 +2,26 @@
 
 All notable changes to SurveyHub-MCP will be documented in this file.
 
+## [1.16.0] - 2026-07-13
+
+### Added
+
+- Added shared provider cooldowns and bounded rate-limit queues for concurrent requests.
+- Added dependency-free SQLite coordination for Hunter rate limits across local MCP processes sharing an API key.
+- Added Hunter business-code 429 handling across personal and enterprise APIs.
+
+### Changed
+
+- Hunter idempotent requests now use jittered retries and honor server `Retry-After` values up to 120 seconds.
+- Non-idempotent Hunter batch creation requests no longer retry automatically after rate limiting.
+- Interactive MCP calls now fail fast with retry metadata instead of blocking through shared cooldowns longer than 10 seconds.
+
+### Fixed
+
+- Fixed Hunter HTTP 200 responses with business code 429 being reported as successful MCP results.
+- Fixed concurrent Hunter calls continuing at the normal request cadence while another call was backing off.
+- Fixed Hunter API failures being returned as successful MCP tool calls instead of `isError: true` results.
+
 ## [1.15.0] - 2026-07-08
 
 ### Added
