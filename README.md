@@ -211,7 +211,7 @@ API Key 获取入口：
 | `quake_aggregation_fields` | Quake | 聚合字段列表 |
 | `quake_service_aggregation` | Quake | 服务聚合查询 |
 | `zoomeye_user_info` | ZoomEye | 用户信息、订阅信息和积分情况 |
-| `zoomeye_search` | ZoomEye | 资产搜索 |
+| `zoomeye_search` | ZoomEye | 付费账号 v2 资产搜索 |
 | `hunter_personal_search` | Hunter 个人版 | 资产搜索 |
 | `hunter_personal_batch_create` | Hunter 个人版 | 创建批量任务 |
 | `hunter_personal_batch_status` | Hunter 个人版 | 查询批量任务状态 |
@@ -255,14 +255,14 @@ API Key 获取入口：
 | Quake | 全部工具 | 进程内节流，`5 秒/次` |
 | Quake | `quake_service_search`, `quake_service_scroll` | 参数 schema 限制，`size <= 500` |
 | Quake | `quake_service_aggregation` | 本地校验聚合字段最多 2 个，参数 schema 限制 `size <= 10000` |
-| ZoomEye | `zoomeye_search` | 参数 schema 限制，`pagesize <= 10000` |
+| ZoomEye | `zoomeye_search` | 仅调用付费账号 `POST /v2/search`，参数 schema 限制 `pagesize <= 10000` |
 | Hunter 个人版 | 全部搜索工具 | 进程内节流，`1 秒/次` |
 | Hunter 个人版 | 搜索和批量查询语句 | 默认将 `field="value"` 转为 `field=="value"` 精确查询，可用 `exact_search=false` 保留平台模糊查询 |
 | Hunter 个人版 | 批量任务 | 工具描述提示平台限制：`all <= 10`，`ip/domain/company <= 100` |
 | Hunter 企业版 | 全部搜索工具 | 进程内节流，`1 秒/次` |
 | Hunter 企业版 | 搜索和批量查询语句 | 默认将 `field="value"` 转为 `field=="value"` 精确查询，可用 `exact_search=false` 保留平台模糊查询 |
 | Hunter 企业版 | 批量任务 | 工具描述提示平台限制：`all <= 10`，`ip/domain/company <= 10000` |
-| DayDayMap | `daydaymap_search` | 参数 schema 限制，`page <= 10000`、`page_size <= 10000` |
+| DayDayMap | `daydaymap_search` | 本地拒绝空白查询；限制 `page <= 10000`、`page_size <= 10000`、`page × page_size <= 10000` |
 | 全部平台 | 全部 HTTP 请求 | 进程内熔断保护，连续 2 次可恢复失败后暂停 15 秒 |
 
 FOFA、Quake、Hunter 的频率控制和全部平台的熔断状态是单 MCP 进程内的内存状态；如果同时启动多个 MCP 进程，进程之间不会共享这些状态。
