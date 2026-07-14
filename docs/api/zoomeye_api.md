@@ -35,7 +35,10 @@ curl -X POST "https://api.zoomeye.org/v2/userinfo" \
 | 接口名 | 方法 | 地址 | 说明 |
 | --- | --- | --- | --- |
 | 用户信息查询 | POST | `/v2/userinfo` | 获取用户信息、订阅信息和积分情况 |
-| 资产搜索 | POST | `/v2/search` | 根据 ZoomEye 查询语法检索网络资产 |
+| v2 资产搜索 | POST | `/v2/search` | 付费账号资产查询源，支持 v4、v6 和 web 子类型 |
+
+SurveyHub-MCP 将 ZoomEye 作为付费账号查询源，仅支持官方 v2 API。不调用
+`/resources-info`、`/host/search` 或 `/web/search`，也不对 `402 credits_insufficient` 执行旧版接口回退。
 
 ## 用户信息查询
 
@@ -90,7 +93,7 @@ curl -X POST "https://api.zoomeye.org/v2/userinfo" \
 | `points` | string | 普通积分 |
 | `zoomeye_points` | string | 权益积分 |
 
-## 资产搜索
+## v2 资产搜索
 
 ```http
 POST /v2/search
@@ -106,7 +109,7 @@ POST /v2/search
 | `fields` | string | 否 | `ip, port, domain, update_time` | 返回字段，多个字段用英文逗号分隔 |
 | `sub_type` | string | 否 | `v4` | 数据类型，支持 `v4`、`v6`、`web` |
 | `page` | integer | 否 | `1` | 页码，按更新时间排序 |
-| `pagesize` | integer | 否 | `10` | 每页数量；官方文档说明最大 `10000`，当前本地 MCP tool schema 限制最大 `1000` |
+| `pagesize` | integer | 否 | `10` | 每页数量；官方文档和当前 MCP schema 限制最大 `10000` |
 | `facets` | string | 否 | 无 | 聚合统计项，多个字段用英文逗号分隔 |
 | `ignore_cache` | boolean | 否 | `false` | 是否忽略缓存，商业版及以上支持 |
 
@@ -354,19 +357,21 @@ print(response.json())
 
 ## 本地 MCP 实现对应关系
 
-当前 `zoomeye/server.py` 中的 MCP 工具：
+当前 `src/surveyhub_mcp/zoomeye.py` 中的 MCP 工具：
 
 | 工具 | 对应接口 | 说明 |
 | --- | --- | --- |
-| `zoomeye_search` | `POST /v2/search` | 执行 ZoomEye 资产搜索 |
+| `zoomeye_user_info` | `POST /v2/userinfo` | 获取用户、订阅和积分信息 |
+| `zoomeye_search` | `POST /v2/search` | 执行付费账号 v2 资产搜索 |
 
 MCP 输入参数：
 
 | 参数 | 类型 | 默认值 | 说明 |
 | --- | --- | --- | --- |
-| `qbase64` | string | 无 | Base64 编码后的查询语句，必填 |
+| `query` | string | 无 | 原始查询语句，与 `qbase64` 二选一 |
+| `qbase64` | string | 无 | Base64 编码后的 UTF-8 查询语句，与 `query` 二选一 |
 | `page` | integer | `1` | 页码 |
-| `pagesize` | integer | `10` | 每页数量；当前 schema 最大 `1000` |
+| `pagesize` | integer | `10` | v2 每页数量；当前 schema 最大 `10000` |
 | `fields` | string | 无 | 逗号分隔的返回字段 |
 | `sub_type` | string | 无 | `v4`、`v6`、`web` |
 | `facets` | string | 无 | 逗号分隔的统计项 |

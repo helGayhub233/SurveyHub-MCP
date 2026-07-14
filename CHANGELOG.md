@@ -2,6 +2,19 @@
 
 All notable changes to SurveyHub-MCP will be documented in this file.
 
+## [1.17.0] - 2026-07-14
+
+### Changed
+
+- ZoomEye is now explicitly treated as a paid-account query source using only `/v2/userinfo` and `/v2/search`.
+- Legacy/free ZoomEye APIs and automatic 402 fallback are intentionally unsupported.
+- DayDayMap now rejects blank queries and pagination beyond the first 10,000 results before making a paid request.
+- DayDayMap business errors now expose specific structured error types instead of a generic `api_error`.
+
+### Fixed
+
+- Corrected DayDayMap MCP query examples to use `ip.port` and `protocol.service`.
+
 ## [1.16.0] - 2026-07-13
 
 ### Added

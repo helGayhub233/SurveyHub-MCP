@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
-import os
 from typing import Annotated, Any, Literal
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
-from .common import apply_server_metadata, encode_base64, error_payload, missing_env_message, platform_key, request_json
+from .common import (
+    apply_server_metadata,
+    encode_base64,
+    error_payload,
+    missing_env_message,
+    platform_key,
+    request_json,
+)
 from .reference import register_reference_resources
 
 ZOOMEYE_BASE_URL = "https://api.zoomeye.org"
@@ -38,7 +44,7 @@ def _headers(*, json: bool = False) -> dict[str, str]:
 
 
 async def get_zoomeye_user_info() -> dict[str, Any]:
-    """Call ZoomEye user information API."""
+    """Call ZoomEye v2 user information API."""
     if not _zoomeye_key():
         return _missing_key()
 
@@ -48,7 +54,7 @@ async def get_zoomeye_user_info() -> dict[str, Any]:
         url=f"{ZOOMEYE_BASE_URL}/v2/userinfo",
         headers=_headers(),
         auth_hint="Authentication failed. Check ZOOMEYE_API_KEY.",
-        forbidden_hint="Access forbidden. Your ZoomEye account may not have sufficient permissions.",
+        forbidden_hint="Access forbidden. Your ZoomEye paid account may not have sufficient permissions.",
     )
 
 
@@ -63,7 +69,7 @@ async def search_zoomeye_assets(
     facets: str | None = None,
     ignore_cache: bool = False,
 ) -> dict[str, Any]:
-    """Call ZoomEye asset search API."""
+    """Call the paid ZoomEye v2 asset search API."""
     if not _zoomeye_key():
         return _missing_key()
 
@@ -94,7 +100,7 @@ async def search_zoomeye_assets(
         headers=_headers(json=True),
         json=payload,
         auth_hint="Authentication failed. Check ZOOMEYE_API_KEY.",
-        forbidden_hint="Access forbidden. Your ZoomEye account may not have sufficient permissions or points.",
+        forbidden_hint="Access forbidden. This ZoomEye v2 endpoint requires sufficient paid account permissions and points.",
     )
 
 
@@ -104,30 +110,33 @@ def register_zoomeye_tools(server: FastMCP) -> None:
     @server.tool(
         name="zoomeye_user_info",
         title="ZoomEye User Info",
-        description="Get ZoomEye user, subscription, and points information with POST /v2/userinfo.",
+        description="Get paid-account subscription and points information with POST /v2/userinfo.",
     )
     async def zoomeye_user_info() -> dict[str, Any]:
         return await get_zoomeye_user_info()
 
     @server.tool(
         name="zoomeye_search",
-        title="ZoomEye Asset Search",
+        title="ZoomEye v2 Asset Search",
         description=(
-            "Search ZoomEye assets with POST /v2/search. Provide raw query for automatic "
-            "Base64 encoding, or pass qbase64 directly for compatibility with the API docs."
+            "Search ZoomEye paid-account assets with POST /v2/search. Provide a raw query for automatic "
+            "Base64 encoding, or pass qbase64 directly. Free and legacy search APIs are not supported."
         ),
     )
     async def zoomeye_search(
         query: Annotated[
             str | None,
-            Field(description='Raw ZoomEye query, for example title="knownsec" or port=443 && country="CN".'),
+            Field(description='Raw ZoomEye v2 query, for example title="knownsec" or port=443 && country="CN".'),
         ] = None,
         qbase64: Annotated[
             str | None,
-            Field(description="Base64-encoded ZoomEye query. Used as-is when provided."),
+            Field(description="Base64-encoded ZoomEye v2 query. Used as-is when provided."),
         ] = None,
         page: Annotated[int, Field(ge=1, description="Page number sorted by update time.")] = 1,
-        pagesize: Annotated[int, Field(ge=1, le=10000, description="Results per page. Official max is 10000.")] = 10,
+        pagesize: Annotated[
+            int,
+            Field(ge=1, le=10000, description="Results per page. Official v2 maximum is 10000."),
+        ] = 10,
         fields: Annotated[
             str,
             Field(description="Comma-separated return fields, for example ip,port,domain,update_time."),
@@ -140,7 +149,10 @@ def register_zoomeye_tools(server: FastMCP) -> None:
             str | None,
             Field(description=f"Comma-separated facet fields. Supported values: {ZOOMEYE_FACETS}."),
         ] = None,
-        ignore_cache: Annotated[bool, Field(description="Whether to ignore cached data. Business plans and above support this.")] = False,
+        ignore_cache: Annotated[
+            bool,
+            Field(description="Whether to ignore cached data. Business plans and above support this."),
+        ] = False,
     ) -> dict[str, Any]:
         return await search_zoomeye_assets(
             query=query,
@@ -158,7 +170,7 @@ def create_server() -> FastMCP:
     """Create a single-platform ZoomEye MCP server."""
     server = FastMCP(
         "zoomeye-mcp",
-        instructions="Use ZoomEye tools for user information and asset search APIs.",
+        instructions="Use ZoomEye v2 tools as a paid-account asset query source.",
     )
     apply_server_metadata(server)
     register_zoomeye_tools(server)

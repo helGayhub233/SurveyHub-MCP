@@ -131,7 +131,9 @@ curl -XPOST -k 'https://www.daydaymap.com/api/v1/raymap/search/all' \
 ### 本地 MCP 请求控制
 
 - DayDayMap API 始终返回 HTTP 200，因此本地模块会额外解析 JSON 响应中的 `code` 字段，对非 200 的业务错误码做可读性翻译。
-- 参数 schema 限制 `page` 范围 1–10000、`page_size` 范围 1–10000。
+- 参数 schema 限制 `page` 范围 1–10000、`page_size` 范围 1–10000，请求前还会校验 `page × page_size <= 10000`。
+- 空白查询会在本地拒绝，不会调用计费接口。
+- 业务错误会区分为鉴权错误、参数错误、权限不足、积分不足、分页越界和平台错误。
 
 ## 返回字段
 

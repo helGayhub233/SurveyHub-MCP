@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
-import os
 from typing import Annotated, Any
 
 from mcp.server.fastmcp import FastMCP
 from pydantic import Field
 
-from .common import apply_server_metadata, encode_base64, error_payload, missing_env_message, platform_key, request_json
+from .common import (
+    apply_server_metadata,
+    encode_base64,
+    error_payload,
+    missing_env_message,
+    platform_key,
+    request_json,
+)
 from .reference import register_reference_resources
 
 DAYDAYMAP_BASE_URL = "https://www.daydaymap.com"
@@ -45,6 +51,15 @@ DAYDAYMAP_ERROR_CODES = {
     2006: "数据获取失败，请重试。",
 }
 
+DAYDAYMAP_ERROR_TYPES = {
+    2001: "authentication_error",
+    2002: "validation_error",
+    2003: "permission_denied",
+    2004: "insufficient_credits",
+    2005: "pagination_limit",
+    2006: "provider_error",
+}
+
 
 def _daydaymap_key() -> str | None:
     return platform_key("DAYDAYMAP_API_KEY")
@@ -77,6 +92,21 @@ async def search_daydaymap(
     if not _daydaymap_key():
         return _missing_key()
 
+    if not query.strip():
+        return error_payload(
+            platform="DayDayMap",
+            message="DayDayMap query must not be empty.",
+            error_type="validation_error",
+        )
+
+    if page < 1 or page_size < 1 or page * page_size > 10000:
+        return error_payload(
+            platform="DayDayMap",
+            message="DayDayMap only allows access to the first 10,000 results (page x page_size <= 10000).",
+            error_type="pagination_limit",
+            details={"page": page, "page_size": page_size, "maximum_results": 10000},
+        )
+
     payload: dict[str, object] = {
         "page": page,
         "page_size": page_size,
@@ -106,12 +136,13 @@ async def search_daydaymap(
 
     code = data.get("code")
     if code != 200:
-        message = DAYDAYMAP_ERROR_CODES.get(code, f"未知错误 (code={code})")
+        guidance = DAYDAYMAP_ERROR_CODES.get(code, f"未知错误 (code={code})")
+        provider_message = data.get("msg")
         return error_payload(
             platform="DayDayMap",
-            message=f"DayDayMap API 错误 (code={code}): {data.get('msg', message)}",
-            error_type="api_error",
-            details={"code": code},
+            message=f"DayDayMap API 错误 (code={code}): {provider_message or guidance}",
+            error_type=DAYDAYMAP_ERROR_TYPES.get(code, "api_error"),
+            details={"code": code, "provider_message": provider_message, "guidance": guidance},
         )
 
     return result
@@ -136,9 +167,11 @@ def register_daydaymap_tools(server: FastMCP) -> None:
         query: Annotated[
             str,
             Field(
+                min_length=1,
                 description=(
                     "DayDayMap query string. Use English double quotes for values. "
-                    'Examples: ip="1.1.1.1", domain="example.com", port="443" && service="https", '
+                    'Examples: ip="1.1.1.1", domain="example.com", '
+                    'ip.port="443" && protocol.service="https", '
                     'ip.country="中国" && web.title="管理系统", cert.subject.cn="example.com".'
                 )
             ),
@@ -156,7 +189,9 @@ def register_daydaymap_tools(server: FastMCP) -> None:
         ] = None,
         exclude_fields: Annotated[
             str | None,
-            Field(description="Comma-separated fields to exclude from response. Only effective when fields is not set."),
+            Field(
+                description="Comma-separated fields to exclude from response. Only effective when fields is not set."
+            ),
         ] = None,
     ) -> dict[str, Any]:
         return await search_daydaymap(
