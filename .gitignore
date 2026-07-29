@@ -1,43 +1,57 @@
-# Python-generated files
+# Python
 __pycache__/
-*.py[oc]
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+.eggs/
 build/
 dist/
 wheels/
-*.egg-info
+
+# Test / coverage / lint caches
 tests/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.tox/
+.nox/
 .coverage
 coverage.xml
 htmlcov/
 
 # Virtual environments
-.venv
+.venv/
+venv/
+env/
 
-# Local secrets and client config
+# Local secrets and runtime config
 .env
 .env.*
 !.env.example
 mcp.json
 
-# IDE
+# IDE / editor
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
 
-# OS
+# OS generated
 .DS_Store
 Thumbs.db
 
-# Local tool state and scratch files
+# Local tool state
 .playwright-mcp/
 .code-review-graph/
+graphify-out/
 .agents/
 .codex/
+
+# Logs / temp
 *.log
 *.tmp
+
+# Local scratch
 main.py

@@ -1,13 +1,13 @@
 <h1 align="center">SurveyHub-MCP</h1>
 
-<p align="center">基于 <code>FastMCP</code> 编写的空间测绘 MCP Server，聚合查询 FOFA、Quake、Hunter、ZoomEye、DayDayMap</p>
+<p align="center">聚合 FOFA、Quake、Hunter、ZoomEye 与 DayDayMap 的空间测绘 MCP Server</p>
 
 <p align="center">
-  <img src="https://img.shields.io/pypi/v/surveyhub-mcp?label=PyPI&color=3775A9" alt="PyPI 版本"/>
-  <img src="https://img.shields.io/badge/Python-%3E%3D3.10-3776AB" alt="Python >=3.10"/>
-  <img src="https://img.shields.io/badge/MCP%20SDK-%3E%3D1.28.1-6F42C1" alt="MCP SDK >=1.28.1"/>
-  <img src="https://img.shields.io/pypi/dm/surveyhub-mcp?label=Downloads&color=2EA44F" alt="PyPI 下载量"/>
-  <img src="https://img.shields.io/github/license/helGayhub233/SurveyHub-MCP?label=License&color=blue" alt="许可证"/>
+  <img src="https://badgen.net/pypi/v/surveyhub-mcp?label=PyPI&color=3775A9&cache=300" alt="PyPI v1.18.0"/>
+  <img src="https://badgen.net/badge/Python/%3E%3D3.10/3776AB" alt="Python >=3.10"/>
+  <img src="https://badgen.net/badge/MCP%20SDK/2.0.0/6F42C1" alt="MCP SDK 2.0.0"/>
+  <img src="https://badgen.net/pypi/dm/surveyhub-mcp?label=Downloads&color=2EA44F&cache=86400" alt="PyPI 下载量"/>
+  <img src="https://badgen.net/github/license/helGayhub233/SurveyHub-MCP?label=License&color=blue" alt="许可证"/>
 </p>
 
 ## 支持平台
@@ -24,7 +24,7 @@
 
 ### 通过 pip 安装
 
-要求 Python `>=3.10`，MCP Python SDK `>=1.28.1`。用户无需 clone 源码，可直接从 PyPI 安装：
+要求 Python `>=3.10`，MCP Python SDK `>=2.0.0,<3`。用户无需 clone 源码，可直接从 PyPI 安装：
 
 ```bash
 python -m pip install -U surveyhub-mcp
@@ -35,6 +35,9 @@ python -m pip install -U surveyhub-mcp
 ```bash
 surveyhub-mcp
 ```
+
+服务同时兼容 MCP `2026-07-28` 和 `2025-11-25`；SDK 会根据客户端自动选择
+`server/discover` 或传统 `initialize` 流程。
 
 MCP 客户端配置：
 
@@ -65,8 +68,8 @@ MCP 客户端配置：
 fofa-mcp
 quake-mcp
 zoomeye-mcp
-hunter-personal-mcp //个人版
-hunter-enterprise-mcp //企业版
+hunter-personal-mcp # 个人版
+hunter-enterprise-mcp # 企业版
 daydaymap-mcp
 ```
 

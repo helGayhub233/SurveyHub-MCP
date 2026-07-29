@@ -14,10 +14,81 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Annotated, Any, Callable
 
 import httpx
-from mcp.types import CallToolResult, TextContent
+from mcp.server import MCPServer
+from mcp.types import CallToolResult, TextContent, ToolAnnotations
+from pydantic import BaseModel, ConfigDict, Field
+
+READ_ONLY_REMOTE_TOOL = ToolAnnotations(
+    read_only_hint=True,
+    destructive_hint=False,
+    idempotent_hint=True,
+    open_world_hint=True,
+)
+MUTATING_REMOTE_TOOL = ToolAnnotations(
+    read_only_hint=False,
+    destructive_hint=False,
+    idempotent_hint=False,
+    open_world_hint=True,
+)
+LOCAL_FILE_WRITE_TOOL = ToolAnnotations(
+    read_only_hint=False,
+    destructive_hint=True,
+    idempotent_hint=False,
+    open_world_hint=True,
+)
+
+class SurveyHubError(BaseModel):
+    """Normalized error details returned by every SurveyHub provider."""
+
+    model_config = ConfigDict(extra="allow")
+
+    type: str = Field(description="Stable machine-readable error category.")
+    message: str = Field(description="Human-readable error and recovery guidance.")
+    status_code: int | None = Field(default=None, description="HTTP or provider status code, when available.")
+    details: dict[str, Any] | None = Field(
+        default=None,
+        description="Provider-specific diagnostic details that do not contain credentials.",
+    )
+
+
+class SurveyHubDownload(BaseModel):
+    """Metadata for a provider export saved to local disk."""
+
+    bytes: int = Field(ge=0, description="Number of bytes written.")
+    path: str = Field(description="Expanded local path of the saved export.")
+
+
+class SurveyHubResponse(BaseModel):
+    """Unified success, error, and download envelope for SurveyHub tools."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    ok: bool = Field(description="Whether the tool operation succeeded.")
+    platform: str = Field(description="Provider that handled the operation.")
+    data: Any | None = Field(default=None, description="Provider JSON response for successful API calls.")
+    text: str | None = Field(default=None, description="Provider text response when JSON is unavailable.")
+    error: SurveyHubError | None = Field(default=None, description="Normalized failure details.")
+    download: SurveyHubDownload | None = Field(default=None, description="Local export metadata.")
+
+
+StructuredToolResult = Annotated[CallToolResult, SurveyHubResponse]
+
+
+def validated_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    """Validate and serialize the unified public response envelope."""
+    return SurveyHubResponse.model_validate(payload).model_dump(exclude_none=True)
+
+
+class SurveyHubMCPServer(MCPServer):
+    """MCP server that advertises the unified Pydantic output contract."""
+
+    async def list_tools(self):
+        tools = await super().list_tools()
+        output_schema = SurveyHubResponse.model_json_schema(mode="serialization")
+        return [tool.model_copy(update={"output_schema": output_schema}) for tool in tools]
 
 @dataclass(frozen=True)
 class HttpPolicy:
@@ -385,31 +456,23 @@ def render_json(data: Any) -> str:
 
 def mcp_tool_result(payload: dict[str, Any]) -> CallToolResult:
     """Convert a platform payload into a spec-compliant MCP tool result."""
+    payload = validated_payload(payload)
     return CallToolResult(
         content=[TextContent(type="text", text=render_json(payload))],
-        structuredContent=payload,
-        isError=not payload.get("ok", False),
+        structured_content=payload,
+        is_error=not payload.get("ok", False),
     )
-
-
-def apply_server_metadata(server: Any) -> None:
-    """Keep FastMCP handshake metadata aligned with package metadata."""
-    from . import __version__
-
-    mcp_server = getattr(server, "_mcp_server", None)
-    if mcp_server is not None:
-        mcp_server.version = __version__
 
 
 def response_payload(*, platform: str, response: httpx.Response) -> dict[str, Any]:
     """Return an MCP-friendly structured payload for successful HTTP responses."""
     if not response.content:
-        return {"ok": True, "platform": platform, "data": None}
+        return validated_payload({"ok": True, "platform": platform, "data": None})
 
     try:
-        return {"ok": True, "platform": platform, "data": response.json()}
+        return validated_payload({"ok": True, "platform": platform, "data": response.json()})
     except ValueError:
-        return {"ok": True, "platform": platform, "text": response.text}
+        return validated_payload({"ok": True, "platform": platform, "text": response.text})
 
 
 def error_payload(
@@ -433,7 +496,7 @@ def error_payload(
         payload["error"]["status_code"] = status_code
     if details:
         payload["error"]["details"] = details
-    return payload
+    return validated_payload(payload)
 
 
 def first_env(names: tuple[str, ...]) -> tuple[str | None, str | None]:
@@ -856,14 +919,14 @@ async def request_download(
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(response.content)
                 await circuit_breaker.record_success()
-                return {
+                return validated_payload({
                     "ok": True,
                     "platform": platform,
                     "download": {
                         "bytes": len(response.content),
                         "path": str(path),
                     },
-                }
+                })
         except httpx.HTTPStatusError as error:
             if error.response.status_code == 429:
                 delay = _retry_delay(error.response, attempt, http_policy=http_policy)

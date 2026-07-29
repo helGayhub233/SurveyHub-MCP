@@ -5,10 +5,21 @@ from __future__ import annotations
 from typing import Annotated, Any
 from urllib.parse import quote
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 from pydantic import Field
 
-from .common import AsyncRateLimiter, apply_server_metadata, encode_base64, error_payload, missing_env_message, platform_key, request_json, split_csv
+from . import __version__
+from .common import (
+    READ_ONLY_REMOTE_TOOL,
+    AsyncRateLimiter,
+    SurveyHubMCPServer,
+    encode_base64,
+    error_payload,
+    missing_env_message,
+    platform_key,
+    request_json,
+    split_csv,
+)
 from .reference import register_reference_resources
 
 FOFA_BASE_URL = "https://fofa.info"
@@ -206,16 +217,20 @@ async def get_fofa_user_info() -> dict[str, Any]:
     )
 
 
-def register_fofa_tools(server: FastMCP) -> None:
-    """Register FOFA tools on a FastMCP server."""
+def register_fofa_tools(server: MCPServer) -> None:
+    """Register FOFA tools on an MCP server."""
 
     @server.tool(
         name="fofa_search",
-        title="FOFA Search",
+        title="Search FOFA Assets by Page",
         description=(
-            "Search FOFA assets with /api/v1/search/all. Query is encoded as qbase64. "
-            f"Supported fields include: {FOFA_SEARCH_FIELDS}."
+            "Search FOFA assets with page-based pagination and selectable return fields. "
+            "Use fofa_search_next for stable continuous pagination over a large result "
+            "set, fofa_host for one host, or fofa_search_stats for aggregation. The "
+            "query is Base64-encoded automatically; this read-only request consumes "
+            "FOFA account quota and is throttled to one call every 0.6 seconds."
         ),
+        annotations=READ_ONLY_REMOTE_TOOL,
     )
     async def fofa_search(
         query: Annotated[
@@ -239,11 +254,14 @@ def register_fofa_tools(server: FastMCP) -> None:
 
     @server.tool(
         name="fofa_search_next",
-        title="FOFA Continuous Search",
+        title="Search FOFA Assets with Cursor Pagination",
         description=(
-            "Search FOFA assets with /api/v1/search/next. Use returned next value "
-            "for stable continuous pagination over a large result set."
+            "Search FOFA assets using a stable next-token cursor for large result sets. "
+            "Use fofa_search for ordinary page-based browsing. Pass the returned next "
+            "value as next_id; this read-only request consumes FOFA account quota and "
+            "is throttled to one call every 0.6 seconds."
         ),
+        annotations=READ_ONLY_REMOTE_TOOL,
     )
     async def fofa_search_next(
         query: Annotated[str, Field(description="FOFA query to encode as qbase64.")],
@@ -264,12 +282,14 @@ def register_fofa_tools(server: FastMCP) -> None:
 
     @server.tool(
         name="fofa_search_stats",
-        title="FOFA Search Stats",
+        title="Aggregate FOFA Asset Search Statistics",
         description=(
-            "Aggregate FOFA search results with /api/v1/search/stats. "
-            "Calls are throttled to one request every 5 seconds in this MCP process. "
-            f"Supported fields: {FOFA_STATS_FIELDS}."
+            "Aggregate FOFA search results into counts for selected fields. Use "
+            "fofa_search when individual asset records are required. This read-only "
+            "request consumes FOFA quota and is throttled to one call every 5 seconds "
+            "in this MCP process."
         ),
+        annotations=READ_ONLY_REMOTE_TOOL,
     )
     async def fofa_search_stats(
         query: Annotated[str, Field(description="FOFA query to encode as qbase64.")],
@@ -282,11 +302,13 @@ def register_fofa_tools(server: FastMCP) -> None:
 
     @server.tool(
         name="fofa_host",
-        title="FOFA Host Aggregation",
+        title="Inspect One FOFA Host and Its Services",
         description=(
-            "Get FOFA host aggregation data with /api/v1/host/{host}. "
-            "Calls are throttled to one request every 1 second in this MCP process."
+            "Get FOFA aggregation data for one hostname or IP address. Use fofa_search "
+            "for query-based discovery across multiple assets. This read-only request "
+            "consumes FOFA quota and is throttled to one call per second."
         ),
+        annotations=READ_ONLY_REMOTE_TOOL,
     )
     async def fofa_host(
         host: Annotated[str, Field(description="Host name or IP address, usually an IP.")],
@@ -296,20 +318,27 @@ def register_fofa_tools(server: FastMCP) -> None:
 
     @server.tool(
         name="fofa_user_info",
-        title="FOFA User Info",
-        description="Get FOFA account status, quota, and membership information with /api/v1/info/my.",
+        title="Inspect FOFA Account and Remaining Quota",
+        description=(
+            "Get FOFA account status, remaining quota, and membership information. "
+            "Use this before searches when account capacity or permissions are uncertain. "
+            "This operation is read-only."
+        ),
+        annotations=READ_ONLY_REMOTE_TOOL,
     )
     async def fofa_user_info() -> dict[str, Any]:
         return await get_fofa_user_info()
 
 
-def create_server() -> FastMCP:
+def create_server() -> SurveyHubMCPServer:
     """Create a single-platform FOFA MCP server."""
-    server = FastMCP(
+    server = SurveyHubMCPServer(
         "fofa-mcp",
+        title="FOFA MCP",
+        description="FOFA cyberspace asset search and account APIs.",
         instructions="Use FOFA tools for FOFA cyberspace asset search and account APIs.",
+        version=__version__,
     )
-    apply_server_metadata(server)
     register_fofa_tools(server)
     register_reference_resources(server, ("fofa-syntax", "fofa-api"))
     return server

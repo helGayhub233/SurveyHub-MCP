@@ -5,10 +5,20 @@ from __future__ import annotations
 import os
 from typing import Annotated, Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 from pydantic import Field
 
-from .common import AsyncRateLimiter, apply_server_metadata, error_payload, missing_env_message, platform_key, request_json, split_csv
+from . import __version__
+from .common import (
+    READ_ONLY_REMOTE_TOOL,
+    AsyncRateLimiter,
+    SurveyHubMCPServer,
+    error_payload,
+    missing_env_message,
+    platform_key,
+    request_json,
+    split_csv,
+)
 from .reference import register_reference_resources
 
 QUAKE_BASE_URL = "https://quake.360.net"
@@ -302,35 +312,47 @@ async def aggregate_quake_service(
     )
 
 
-def register_quake_tools(server: FastMCP) -> None:
-    """Register Quake tools on a FastMCP server."""
+def register_quake_tools(server: MCPServer) -> None:
+    """Register Quake tools on an MCP server."""
 
     @server.tool(
         name="quake_user_info",
-        title="Quake User Info",
-        description="Get Quake user details, quota, token, and role information with /api/v3/user/info.",
+        title="Inspect Quake Account and Remaining Credits",
+        description=(
+            "Get Quake account details, remaining quota, token status, and role "
+            "information. Use this before searches when permissions or credits are "
+            "uncertain. This operation is read-only and is throttled to one call "
+            "every 5 seconds."
+        ),
+        annotations=READ_ONLY_REMOTE_TOOL,
     )
     async def quake_user_info() -> dict[str, Any]:
         return await get_quake_user_info()
 
     @server.tool(
         name="quake_filterable_fields",
-        title="Quake Filterable Fields",
+        title="List Quake Service Search Filter Fields",
         description=(
-            "Get Quake service fields usable in include/exclude with "
-            f"/api/v3/filterable/field/quake_service. Examples: {QUAKE_FILTERABLE_FIELDS}."
+            "List Quake service fields accepted by the include and exclude parameters "
+            "of search tools. Use quake_aggregation_fields instead when choosing an "
+            "aggregation_list field. This operation is read-only and is throttled to "
+            "one call every 5 seconds."
         ),
+        annotations=READ_ONLY_REMOTE_TOOL,
     )
     async def quake_filterable_fields() -> dict[str, Any]:
         return await get_quake_filterable_fields()
 
     @server.tool(
         name="quake_service_search",
-        title="Quake Service Search",
+        title="Search Quake Services with Offset Pagination",
         description=(
-            "Run real-time Quake service search with /api/v3/search/quake_service. "
-            "Use this for small result sets; use quake_service_scroll for deep pagination."
+            "Run a real-time Quake service search using offset pagination. Use this for "
+            "small result sets; use quake_service_scroll for deep pagination. This "
+            "read-only remote request consumes Quake quota and is throttled to one call "
+            "every 5 seconds."
         ),
+        annotations=READ_ONLY_REMOTE_TOOL,
     )
     async def quake_service_search(
         query: Annotated[str, Field(description='Quake query, for example service:http or port:443 AND country:"China".')],
@@ -363,11 +385,14 @@ def register_quake_tools(server: FastMCP) -> None:
 
     @server.tool(
         name="quake_service_scroll",
-        title="Quake Service Scroll",
+        title="Search Quake Services with Cursor Pagination",
         description=(
-            "Run deep-pagination Quake service search with /api/v3/scroll/quake_service. "
-            "Use meta.pagination_id from the response as pagination_id for the next page."
+            "Run a deep-pagination Quake service search using a five-minute cursor. Use "
+            "quake_service_search for small offset-based result sets. Pass the returned "
+            "meta.pagination_id to the next call; this read-only request consumes quota "
+            "and is throttled to one call every 5 seconds."
         ),
+        annotations=READ_ONLY_REMOTE_TOOL,
     )
     async def quake_service_scroll(
         query: Annotated[str, Field(description='Quake query, for example service:http or port:443 AND country:"China".')],
@@ -400,8 +425,15 @@ def register_quake_tools(server: FastMCP) -> None:
 
     @server.tool(
         name="quake_search",
-        title="Quake Search (Scroll Compatibility)",
-        description="Backward-compatible alias for quake_service_scroll.",
+        title="Search Quake Services through the Legacy Alias",
+        description=(
+            "Compatibility alias that performs the same deep-pagination search as "
+            "quake_service_scroll. Use only for clients that still reference this "
+            "legacy name; use quake_service_scroll for all new calls. The operation is "
+            "a read-only remote request that consumes Quake quota and is throttled to "
+            "one call every 5 seconds."
+        ),
+        annotations=READ_ONLY_REMOTE_TOOL,
     )
     async def quake_search(
         query: Annotated[str, Field(description='Quake query, for example service:http or port:443 AND country:"China".')],
@@ -428,19 +460,27 @@ def register_quake_tools(server: FastMCP) -> None:
 
     @server.tool(
         name="quake_aggregation_fields",
-        title="Quake Aggregation Fields",
+        title="List Quake Service Aggregation Fields",
         description=(
-            "Get Quake service aggregation fields with /api/v3/aggregation/quake_service. "
-            f"Examples: {QUAKE_AGGREGATION_FIELDS}."
+            "List fields accepted by quake_service_aggregation in aggregation_list. "
+            "Use quake_filterable_fields for search include/exclude fields instead. "
+            "This operation is read-only and is throttled to one call every 5 seconds."
         ),
+        annotations=READ_ONLY_REMOTE_TOOL,
     )
     async def quake_aggregation_fields() -> dict[str, Any]:
         return await get_quake_aggregation_fields()
 
     @server.tool(
         name="quake_service_aggregation",
-        title="Quake Service Aggregation",
-        description="Run Quake service aggregation query with /api/v3/aggregation/quake_service.",
+        title="Aggregate Quake Service Search Matches",
+        description=(
+            "Aggregate Quake service matches into buckets for one or two fields. Use "
+            "quake_service_search when individual service records are required, and "
+            "quake_aggregation_fields to discover valid bucket fields. This read-only "
+            "request consumes quota and is throttled to one call every 5 seconds."
+        ),
+        annotations=READ_ONLY_REMOTE_TOOL,
     )
     async def quake_service_aggregation(
         query: Annotated[str, Field(description='Quake query, for example country:"China".')],
@@ -466,13 +506,15 @@ def register_quake_tools(server: FastMCP) -> None:
         )
 
 
-def create_server() -> FastMCP:
+def create_server() -> SurveyHubMCPServer:
     """Create a single-platform Quake MCP server."""
-    server = FastMCP(
+    server = SurveyHubMCPServer(
         "quake-mcp",
+        title="Quake MCP",
+        description="360 Quake cyberspace asset search and account APIs.",
         instructions="Use Quake tools for 360 Quake user, service search, scroll, and aggregation APIs.",
+        version=__version__,
     )
-    apply_server_metadata(server)
     register_quake_tools(server)
     register_reference_resources(server, ("quake-syntax", "quake-api"))
     return server

@@ -2,6 +2,25 @@
 
 All notable changes to SurveyHub-MCP will be documented in this file.
 
+## [Unreleased]
+
+## [1.18.0] - 2026-07-29
+
+### Added
+
+- Added a unified Pydantic output contract for provider data, normalized errors, and local download metadata.
+
+### Changed
+
+- Added meaningful titles, complete parameter descriptions, output schemas, and MCP Tool Annotations across the public tool surface.
+- Reworked tool descriptions to distinguish sibling tools and disclose authentication, quota, rate-limit, and file-write behavior.
+- Disclosed FOFA, Quake, and Hunter request pacing wherever those limits apply.
+- Shortened the DayDayMap tool description and moved its field catalog into parameter schema and reference guidance.
+- Updated the README compatibility badge to MCP SDK 2.0.0.
+- Migrated from FastMCP v1 to the official MCP Python SDK 2.0.0 `MCPServer` API.
+- Added dual-era support for MCP `2026-07-28` and legacy `2025-11-25` clients.
+- Migrated MCP protocol model construction to the SDK v2 snake_case field names.
+
 ## [1.17.0] - 2026-07-14
 
 ### Changed

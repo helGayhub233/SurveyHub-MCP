@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from mcp.server.fastmcp import FastMCP
-
-from .common import apply_server_metadata
+from . import __version__
+from .common import SurveyHubMCPServer
 from .daydaymap import register_daydaymap_tools
 from .fofa import register_fofa_tools
 from .hunter_enterprise import register_hunter_enterprise_tools
@@ -20,10 +19,15 @@ SERVER_INSTRUCTIONS = (
 )
 
 
-def create_server() -> FastMCP:
+def create_server() -> SurveyHubMCPServer:
     """Create the aggregate MCP server."""
-    server = FastMCP("surveyhub-mcp", instructions=SERVER_INSTRUCTIONS)
-    apply_server_metadata(server)
+    server = SurveyHubMCPServer(
+        "surveyhub-mcp",
+        title="SurveyHub MCP",
+        description="Cyberspace asset search across FOFA, Quake, Hunter, ZoomEye, and DayDayMap.",
+        instructions=SERVER_INSTRUCTIONS,
+        version=__version__,
+    )
     register_fofa_tools(server)
     register_quake_tools(server)
     register_hunter_personal_tools(server)

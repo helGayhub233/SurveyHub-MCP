@@ -5,13 +5,17 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-from mcp.server.fastmcp import FastMCP
-from mcp.types import CallToolResult
+from mcp.server import MCPServer
 from pydantic import Field
 
+from . import __version__
 from .common import (
+    LOCAL_FILE_WRITE_TOOL,
+    MUTATING_REMOTE_TOOL,
+    READ_ONLY_REMOTE_TOOL,
+    SurveyHubMCPServer,
+    StructuredToolResult,
     AsyncRateLimiter,
-    apply_server_metadata,
     encode_base64_url,
     error_payload,
     missing_any_env_message,
@@ -279,13 +283,20 @@ async def get_hunter_enterprise_user_info() -> dict[str, Any]:
     )
 
 
-def register_hunter_enterprise_tools(server: FastMCP) -> None:
-    """Register Hunter enterprise tools on a FastMCP server."""
+def register_hunter_enterprise_tools(server: MCPServer) -> None:
+    """Register Hunter enterprise tools on an MCP server."""
 
     @server.tool(
         name="hunter_enterprise_search",
-        title="Hunter Enterprise Search",
-        description=f"Search Hunter enterprise API /openApi/search. Enterprise fields: {HUNTER_ENTERPRISE_FIELDS}.",
+        title="Search Assets with a Hunter Enterprise Account",
+        description=(
+            "Search assets through a Hunter enterprise or sub-account, including "
+            "enterprise-only whois, body, and vulnerability fields. Use "
+            "hunter_personal_search for personal accounts. This read-only remote "
+            "request consumes quota, is throttled to one call per second, and "
+            "exact-matches quoted field values by default."
+        ),
+        annotations=READ_ONLY_REMOTE_TOOL,
     )
     async def hunter_enterprise_search(
         query: Annotated[str, Field(description='Hunter query, for example web.title="login".')],
@@ -300,7 +311,7 @@ def register_hunter_enterprise_tools(server: FastMCP) -> None:
             bool,
             Field(description='Convert Hunter field="value" fuzzy comparisons to field=="value" exact comparisons by default.'),
         ] = True,
-    ) -> CallToolResult:
+    ) -> StructuredToolResult:
         return mcp_tool_result(await search_hunter_enterprise(
             query=query,
             page=page,
@@ -315,8 +326,16 @@ def register_hunter_enterprise_tools(server: FastMCP) -> None:
 
     @server.tool(
         name="hunter_enterprise_batch_create",
-        title="Hunter Enterprise Batch Create",
-        description="Create a Hunter enterprise batch search task with query or CSV file upload.",
+        title="Create a Hunter Enterprise Batch Search Task",
+        description=(
+            "Create an asynchronous Hunter enterprise batch-search task from either a "
+            "query or local CSV file. Use hunter_enterprise_batch_status until the task "
+            "finishes, then use hunter_enterprise_batch_pull for paginated JSON or "
+            "hunter_enterprise_batch_download for a local CSV. Creation is "
+            "non-idempotent, consumes quota, is throttled to one call per second, and CSV limits are "
+            "all<=10 or ip/domain/company<=10000."
+        ),
+        annotations=MUTATING_REMOTE_TOOL,
     )
     async def hunter_enterprise_batch_create(
         query: Annotated[str | None, Field(description="Hunter query. Required if file_path is not provided.")] = None,
@@ -335,7 +354,7 @@ def register_hunter_enterprise_tools(server: FastMCP) -> None:
             bool,
             Field(description='For query mode, convert Hunter field="value" fuzzy comparisons to field=="value" exact comparisons by default.'),
         ] = True,
-    ) -> CallToolResult:
+    ) -> StructuredToolResult:
         return mcp_tool_result(await create_hunter_enterprise_batch_task(
             query=query,
             file_path=file_path,
@@ -351,35 +370,56 @@ def register_hunter_enterprise_tools(server: FastMCP) -> None:
 
     @server.tool(
         name="hunter_enterprise_batch_status",
-        title="Hunter Enterprise Batch Status",
-        description="Get Hunter enterprise batch task progress.",
+        title="Check Hunter Enterprise Batch Search Progress",
+        description=(
+            "Get progress and completion state for a task created by "
+            "hunter_enterprise_batch_create. Call this before "
+            "hunter_enterprise_batch_pull or hunter_enterprise_batch_download. This "
+            "operation is read-only, consumes Hunter quota, and is throttled to one "
+            "call per second."
+        ),
+        annotations=READ_ONLY_REMOTE_TOOL,
     )
     async def hunter_enterprise_batch_status(
         task_id: Annotated[str, Field(description="Task ID returned by hunter_enterprise_batch_create.")],
-    ) -> CallToolResult:
+    ) -> StructuredToolResult:
         return mcp_tool_result(await get_hunter_enterprise_batch_status(task_id=task_id))
 
     @server.tool(
         name="hunter_enterprise_batch_download",
-        title="Hunter Enterprise Batch Download",
-        description="Download Hunter enterprise batch task export file to output_path.",
+        title="Download a Hunter Enterprise Batch CSV Export",
+        description=(
+            "Download a completed Hunter enterprise batch export to a local CSV path. "
+            "Use hunter_enterprise_batch_pull for paginated JSON instead and check "
+            "hunter_enterprise_batch_status first. This writes local state and may "
+            "overwrite an existing output_path. The provider request is throttled to "
+            "one call per second."
+        ),
+        annotations=LOCAL_FILE_WRITE_TOOL,
     )
     async def hunter_enterprise_batch_download(
         task_id: Annotated[str, Field(description="Task ID returned by hunter_enterprise_batch_create.")],
         output_path: Annotated[str, Field(description="Local output CSV path.")],
-    ) -> CallToolResult:
+    ) -> StructuredToolResult:
         return mcp_tool_result(await download_hunter_enterprise_batch_file(task_id=task_id, output_path=output_path))
 
     @server.tool(
         name="hunter_enterprise_batch_pull",
-        title="Hunter Enterprise Batch Pull",
-        description="Pull Hunter enterprise batch task results as JSON. Enterprise-only.",
+        title="Pull Hunter Enterprise Batch Results as JSON",
+        description=(
+            "Pull a completed Hunter enterprise batch task as paginated JSON without "
+            "writing a local file. Use hunter_enterprise_batch_download for a CSV file "
+            "or hunter_enterprise_batch_status while the task is incomplete. This "
+            "enterprise-only operation is read-only, consumes Hunter quota, and is "
+            "throttled to one call per second."
+        ),
+        annotations=READ_ONLY_REMOTE_TOOL,
     )
     async def hunter_enterprise_batch_pull(
         task_id: Annotated[str, Field(description="Task ID returned by hunter_enterprise_batch_create.")],
         page: Annotated[int, Field(ge=1, description="Page number.")] = 1,
         page_size: Annotated[Literal[100, 200, 500, 1000], Field(description="Results per page.")] = 500,
-    ) -> CallToolResult:
+    ) -> StructuredToolResult:
         return mcp_tool_result(await pull_hunter_enterprise_batch_results(
             task_id=task_id,
             page=page,
@@ -388,20 +428,27 @@ def register_hunter_enterprise_tools(server: FastMCP) -> None:
 
     @server.tool(
         name="hunter_enterprise_user_info",
-        title="Hunter Enterprise User Info",
-        description="Get Hunter enterprise or sub-account quota and account information.",
+        title="Inspect Hunter Enterprise Account and Quota",
+        description=(
+            "Get Hunter enterprise or sub-account identity, permissions, and remaining "
+            "quota. Use hunter_personal_user_info for personal-account details. This "
+            "operation is read-only and is throttled to one call per second."
+        ),
+        annotations=READ_ONLY_REMOTE_TOOL,
     )
-    async def hunter_enterprise_user_info() -> CallToolResult:
+    async def hunter_enterprise_user_info() -> StructuredToolResult:
         return mcp_tool_result(await get_hunter_enterprise_user_info())
 
 
-def create_server() -> FastMCP:
+def create_server() -> SurveyHubMCPServer:
     """Create a Hunter enterprise MCP server."""
-    server = FastMCP(
+    server = SurveyHubMCPServer(
         "hunter-enterprise-mcp",
+        title="Hunter Enterprise MCP",
+        description="Hunter enterprise cyberspace asset search and quota APIs.",
         instructions="Use Hunter enterprise tools for enterprise-account Hunter APIs.",
+        version=__version__,
     )
-    apply_server_metadata(server)
     register_hunter_enterprise_tools(server)
     register_reference_resources(server, ("hunter-syntax", "hunter-enterprise-api"))
     return server

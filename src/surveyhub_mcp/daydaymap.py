@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from typing import Annotated, Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 from pydantic import Field
 
+from . import __version__
 from .common import (
-    apply_server_metadata,
+    READ_ONLY_REMOTE_TOOL,
+    SurveyHubMCPServer,
     encode_base64,
     error_payload,
     missing_env_message,
@@ -148,20 +150,20 @@ async def search_daydaymap(
     return result
 
 
-def register_daydaymap_tools(server: FastMCP) -> None:
-    """Register DayDayMap tools on a FastMCP server."""
+def register_daydaymap_tools(server: MCPServer) -> None:
+    """Register DayDayMap tools on an MCP server."""
 
     @server.tool(
         name="daydaymap_search",
-        title="DayDayMap Search",
+        title="Search DayDayMap Cyberspace Assets",
         description=(
-            "Search DayDayMap assets with POST /api/v1/raymap/search/all. "
-            "Query is automatically Base64-encoded for the keyword parameter. "
-            "Strings in queries must use English double quotes and are case-insensitive. "
-            f"Supported return fields: {DAYDAYMAP_FIELDS}. "
-            f"Query syntax categories: {DAYDAYMAP_QUERY_CATEGORIES}. "
-            "Logical AND uses &&. Maximum 10,000 results total (page x page_size <= 10000)."
+            "Search DayDayMap assets with automatic Base64 query encoding. Use English "
+            "double quotes and && for logical AND. Results are limited to the first "
+            "10,000 records (page x page_size <= 10000). See the daydaymap-api "
+            "reference resource for complete query syntax. This read-only request "
+            "requires CN_DAYDAYMAP_API_KEY and consumes provider quota."
         ),
+        annotations=READ_ONLY_REMOTE_TOOL,
     )
     async def daydaymap_search(
         query: Annotated[
@@ -172,7 +174,8 @@ def register_daydaymap_tools(server: FastMCP) -> None:
                     "DayDayMap query string. Use English double quotes for values. "
                     'Examples: ip="1.1.1.1", domain="example.com", '
                     'ip.port="443" && protocol.service="https", '
-                    'ip.country="中国" && web.title="管理系统", cert.subject.cn="example.com".'
+                    'ip.country="中国" && web.title="管理系统", cert.subject.cn="example.com". '
+                    f"Supported query fields by category: {DAYDAYMAP_QUERY_CATEGORIES}."
                 )
             ),
         ],
@@ -182,8 +185,9 @@ def register_daydaymap_tools(server: FastMCP) -> None:
             str | None,
             Field(
                 description=(
-                    "Comma-separated fields to include in response. "
-                    "When set, only these fields are returned. Takes priority over exclude_fields."
+                    f"Comma-separated fields to include in response. Supported values: "
+                    f"{DAYDAYMAP_FIELDS}. When set, only these fields are returned and "
+                    "the value takes priority over exclude_fields."
                 )
             ),
         ] = None,
@@ -203,13 +207,15 @@ def register_daydaymap_tools(server: FastMCP) -> None:
         )
 
 
-def create_server() -> FastMCP:
+def create_server() -> SurveyHubMCPServer:
     """Create a single-platform DayDayMap MCP server."""
-    server = FastMCP(
+    server = SurveyHubMCPServer(
         "daydaymap-mcp",
+        title="DayDayMap MCP",
+        description="DayDayMap cyberspace asset search and account APIs.",
         instructions="Use DayDayMap tools for cyberspace asset search APIs.",
+        version=__version__,
     )
-    apply_server_metadata(server)
     register_daydaymap_tools(server)
     register_reference_resources(server, ("daydaymap-api",))
     return server

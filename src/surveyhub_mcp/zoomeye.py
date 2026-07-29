@@ -4,11 +4,13 @@ from __future__ import annotations
 
 from typing import Annotated, Any, Literal
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 from pydantic import Field
 
+from . import __version__
 from .common import (
-    apply_server_metadata,
+    READ_ONLY_REMOTE_TOOL,
+    SurveyHubMCPServer,
     encode_base64,
     error_payload,
     missing_env_message,
@@ -104,24 +106,32 @@ async def search_zoomeye_assets(
     )
 
 
-def register_zoomeye_tools(server: FastMCP) -> None:
-    """Register ZoomEye tools on a FastMCP server."""
+def register_zoomeye_tools(server: MCPServer) -> None:
+    """Register ZoomEye tools on an MCP server."""
 
     @server.tool(
         name="zoomeye_user_info",
-        title="ZoomEye User Info",
-        description="Get paid-account subscription and points information with POST /v2/userinfo.",
+        title="Inspect ZoomEye Subscription and Remaining Points",
+        description=(
+            "Get ZoomEye paid-account subscription, permissions, and remaining points. "
+            "Use this before zoomeye_search when capacity is uncertain. This operation "
+            "is read-only."
+        ),
+        annotations=READ_ONLY_REMOTE_TOOL,
     )
     async def zoomeye_user_info() -> dict[str, Any]:
         return await get_zoomeye_user_info()
 
     @server.tool(
         name="zoomeye_search",
-        title="ZoomEye v2 Asset Search",
+        title="Search Paid ZoomEye v2 Cyberspace Assets",
         description=(
-            "Search ZoomEye paid-account assets with POST /v2/search. Provide a raw query for automatic "
-            "Base64 encoding, or pass qbase64 directly. Free and legacy search APIs are not supported."
+            "Search ZoomEye v2 assets using a paid account. Provide a raw query for "
+            "automatic Base64 encoding, or qbase64 when it is already encoded; do not "
+            "provide both. Free and legacy APIs are unsupported. This read-only remote "
+            "request consumes ZoomEye points."
         ),
+        annotations=READ_ONLY_REMOTE_TOOL,
     )
     async def zoomeye_search(
         query: Annotated[
@@ -166,13 +176,15 @@ def register_zoomeye_tools(server: FastMCP) -> None:
         )
 
 
-def create_server() -> FastMCP:
+def create_server() -> SurveyHubMCPServer:
     """Create a single-platform ZoomEye MCP server."""
-    server = FastMCP(
+    server = SurveyHubMCPServer(
         "zoomeye-mcp",
+        title="ZoomEye MCP",
+        description="ZoomEye cyberspace asset search and account APIs.",
         instructions="Use ZoomEye v2 tools as a paid-account asset query source.",
+        version=__version__,
     )
-    apply_server_metadata(server)
     register_zoomeye_tools(server)
     register_reference_resources(server, ("zoomeye-syntax", "zoomeye-api"))
     return server

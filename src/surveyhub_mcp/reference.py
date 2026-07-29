@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
 _PACKAGE_DOCS_DIR = Path(__file__).resolve().parent / "docs"
 _REPO_DOCS_DIR = Path(__file__).resolve().parents[2] / "docs"
@@ -29,7 +29,7 @@ def _read_doc(relative_path: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def register_reference_resources(server: FastMCP, names: tuple[str, ...] | None = None) -> None:
+def register_reference_resources(server: MCPServer, names: tuple[str, ...] | None = None) -> None:
     """Register read-only syntax and API reference documents."""
     selected_names = names or tuple(_REFERENCE_FILES)
 
@@ -51,7 +51,7 @@ def register_reference_resources(server: FastMCP, names: tuple[str, ...] | None 
         )(make_reader(relative_path))
 
 
-def register_reference_prompts(server: FastMCP) -> None:
+def register_reference_prompts(server: MCPServer) -> None:
     """Register reusable prompts for common SurveyHub workflows."""
 
     @server.prompt(
