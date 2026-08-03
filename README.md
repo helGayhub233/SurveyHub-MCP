@@ -3,7 +3,7 @@
 <p align="center">聚合 FOFA、Quake、Hunter、ZoomEye 与 DayDayMap 的空间测绘 MCP Server</p>
 
 <p align="center">
-  <img src="https://badgen.net/pypi/v/surveyhub-mcp?label=PyPI&color=3775A9&cache=300" alt="PyPI v1.19.0"/>
+  <img src="https://badgen.net/pypi/v/surveyhub-mcp?label=PyPI&color=3775A9&cache=300&version=1.19.0" alt="PyPI v1.19.0"/>
   <img src="https://badgen.net/badge/Python/%3E%3D3.10/3776AB" alt="Python >=3.10"/>
   <img src="https://badgen.net/badge/MCP%20SDK/2.0.0/6F42C1" alt="MCP SDK 2.0.0"/>
   <img src="https://badgen.net/pypi/dm/surveyhub-mcp?label=Downloads&color=2EA44F&cache=86400" alt="PyPI 下载量"/>
