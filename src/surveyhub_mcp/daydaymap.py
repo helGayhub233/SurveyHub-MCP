@@ -9,9 +9,11 @@ from pydantic import Field
 
 from . import __version__
 from .common import (
+    METERED_READ_ONLY_REMOTE_TOOL,
     READ_ONLY_REMOTE_TOOL,
     SurveyHubMCPServer,
     encode_base64,
+    enrich_payload,
     error_payload,
     missing_env_message,
     platform_key,
@@ -89,6 +91,8 @@ async def search_daydaymap(
     page_size: int = 10,
     fields: str | None = None,
     exclude_fields: str | None = None,
+    retry_mode: str = "safe_only",
+    force_retry: bool = False,
 ) -> dict[str, Any]:
     """Call DayDayMap search API with application-level error handling."""
     if not _daydaymap_key():
@@ -125,6 +129,9 @@ async def search_daydaymap(
         url=f"{DAYDAYMAP_BASE_URL}/api/v1/raymap/search/all",
         headers=_headers(),
         json=payload,
+        retry_mode=retry_mode,
+        metered_request=True,
+        force_retry=force_retry,
         auth_hint="Authentication failed. Check DAYDAYMAP_API_KEY.",
         forbidden_hint="Access forbidden. Your DayDayMap account may not have sufficient permissions.",
     )
@@ -140,11 +147,14 @@ async def search_daydaymap(
     if code != 200:
         guidance = DAYDAYMAP_ERROR_CODES.get(code, f"未知错误 (code={code})")
         provider_message = data.get("msg")
-        return error_payload(
-            platform="DayDayMap",
-            message=f"DayDayMap API 错误 (code={code}): {provider_message or guidance}",
-            error_type=DAYDAYMAP_ERROR_TYPES.get(code, "api_error"),
-            details={"code": code, "provider_message": provider_message, "guidance": guidance},
+        return enrich_payload(
+            error_payload(
+                platform="DayDayMap",
+                message=f"DayDayMap API 错误 (code={code}): {provider_message or guidance}",
+                error_type=DAYDAYMAP_ERROR_TYPES.get(code, "api_error"),
+                details={"code": code, "provider_message": provider_message, "guidance": guidance},
+            ),
+            meta=result.get("meta"),
         )
 
     return result
@@ -161,9 +171,10 @@ def register_daydaymap_tools(server: MCPServer) -> None:
             "double quotes and && for logical AND. Results are limited to the first "
             "10,000 records (page x page_size <= 10000). See the daydaymap-api "
             "reference resource for complete query syntax. This read-only request "
-            "requires CN_DAYDAYMAP_API_KEY and consumes provider quota."
+            "requires CN_DAYDAYMAP_API_KEY and consumes provider quota. safe_only never "
+            "repeats a read/write timeout; force_retry accepts possible duplicate quota use."
         ),
-        annotations=READ_ONLY_REMOTE_TOOL,
+        annotations=METERED_READ_ONLY_REMOTE_TOOL,
     )
     async def daydaymap_search(
         query: Annotated[
@@ -197,6 +208,8 @@ def register_daydaymap_tools(server: MCPServer) -> None:
                 description="Comma-separated fields to exclude from response. Only effective when fields is not set."
             ),
         ] = None,
+        retry_mode: Annotated[str, Field(pattern="^(never|safe_only|aggressive)$", description="Retry policy. safe_only retries only failures known to occur before sending; aggressive may consume quota twice.")] = "safe_only",
+        force_retry: Annotated[bool, Field(description="Repeat a recently indeterminate identical request despite possible duplicate quota use.")] = False,
     ) -> dict[str, Any]:
         return await search_daydaymap(
             query=query,
@@ -204,6 +217,8 @@ def register_daydaymap_tools(server: MCPServer) -> None:
             page_size=page_size,
             fields=fields,
             exclude_fields=exclude_fields,
+            retry_mode=retry_mode,
+            force_retry=force_retry,
         )
 
 

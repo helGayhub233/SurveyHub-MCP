@@ -13,8 +13,6 @@
         "CN_FOFA_EMAIL": "optional_fofa_email",
         "CN_QUAKE_KEY": "your_quake_key",
         "CN_ZOOMEYE_API_KEY": "your_zoomeye_api_key",
-        "CN_HUNTER_KEY": "fallback_hunter_key",
-        "CN_HUNTER_PERSONAL_KEY": "your_hunter_personal_key",
         "CN_HUNTER_ENTERPRISE_KEY": "your_hunter_enterprise_key",
         "CN_DAYDAYMAP_API_KEY": "your_daydaymap_api_key"
       }

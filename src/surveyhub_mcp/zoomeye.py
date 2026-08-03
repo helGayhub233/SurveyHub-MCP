@@ -9,6 +9,7 @@ from pydantic import Field
 
 from . import __version__
 from .common import (
+    METERED_READ_ONLY_REMOTE_TOOL,
     READ_ONLY_REMOTE_TOOL,
     SurveyHubMCPServer,
     encode_base64,
@@ -70,6 +71,8 @@ async def search_zoomeye_assets(
     sub_type: Literal["v4", "v6", "web"] = "v4",
     facets: str | None = None,
     ignore_cache: bool = False,
+    retry_mode: str = "safe_only",
+    force_retry: bool = False,
 ) -> dict[str, Any]:
     """Call the paid ZoomEye v2 asset search API."""
     if not _zoomeye_key():
@@ -101,6 +104,9 @@ async def search_zoomeye_assets(
         url=f"{ZOOMEYE_BASE_URL}/v2/search",
         headers=_headers(json=True),
         json=payload,
+        retry_mode=retry_mode,
+        metered_request=True,
+        force_retry=force_retry,
         auth_hint="Authentication failed. Check ZOOMEYE_API_KEY.",
         forbidden_hint="Access forbidden. This ZoomEye v2 endpoint requires sufficient paid account permissions and points.",
     )
@@ -113,9 +119,11 @@ def register_zoomeye_tools(server: MCPServer) -> None:
         name="zoomeye_user_info",
         title="Inspect ZoomEye Subscription and Remaining Points",
         description=(
-            "Get ZoomEye paid-account subscription, permissions, and remaining points. "
-            "Use this before zoomeye_search when capacity is uncertain. This operation "
-            "is read-only."
+            "Inspect the configured paid ZoomEye account's subscription, permissions, "
+            "and remaining points. Use this before zoomeye_search when authorization or "
+            "point capacity is uncertain; do not use it for asset discovery. This "
+            "read-only operation requires a configured paid-account API key, retrieves "
+            "only account metadata, and performs no asset search."
         ),
         annotations=READ_ONLY_REMOTE_TOOL,
     )
@@ -129,9 +137,11 @@ def register_zoomeye_tools(server: MCPServer) -> None:
             "Search ZoomEye v2 assets using a paid account. Provide a raw query for "
             "automatic Base64 encoding, or qbase64 when it is already encoded; do not "
             "provide both. Free and legacy APIs are unsupported. This read-only remote "
-            "request consumes ZoomEye points."
+            "request requires CN_ZOOMEYE_API_KEY and consumes ZoomEye points. safe_only "
+            "never repeats a read/write timeout; force_retry accepts possible duplicate "
+            "point use."
         ),
-        annotations=READ_ONLY_REMOTE_TOOL,
+        annotations=METERED_READ_ONLY_REMOTE_TOOL,
     )
     async def zoomeye_search(
         query: Annotated[
@@ -163,6 +173,8 @@ def register_zoomeye_tools(server: MCPServer) -> None:
             bool,
             Field(description="Whether to ignore cached data. Business plans and above support this."),
         ] = False,
+        retry_mode: Annotated[str, Field(pattern="^(never|safe_only|aggressive)$", description="Retry policy. safe_only retries only failures known to occur before sending; aggressive may consume points twice.")] = "safe_only",
+        force_retry: Annotated[bool, Field(description="Repeat a recently indeterminate identical request despite possible duplicate point use.")] = False,
     ) -> dict[str, Any]:
         return await search_zoomeye_assets(
             query=query,
@@ -173,6 +185,8 @@ def register_zoomeye_tools(server: MCPServer) -> None:
             sub_type=sub_type,
             facets=facets,
             ignore_cache=ignore_cache,
+            retry_mode=retry_mode,
+            force_retry=force_retry,
         )
 
 

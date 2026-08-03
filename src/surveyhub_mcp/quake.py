@@ -10,9 +10,11 @@ from pydantic import Field
 
 from . import __version__
 from .common import (
+    METERED_READ_ONLY_REMOTE_TOOL,
     READ_ONLY_REMOTE_TOOL,
     AsyncRateLimiter,
     SurveyHubMCPServer,
+    enrich_payload,
     error_payload,
     missing_env_message,
     platform_key,
@@ -35,6 +37,11 @@ QUAKE_FILTERABLE_FIELDS = (
     "service.http.body, components.product_type, location.district_en, "
     "service.http.favicon.data, ip, service.http.icp.licence, components.version, "
     "location.country_en, port, service.response"
+)
+QUAKE_FILTERABLE_FIELD_SET = frozenset(field.strip() for field in QUAKE_FILTERABLE_FIELDS.split(","))
+QUAKE_FILTER_FIELDS_DESCRIPTION = (
+    "Comma-separated official Quake service fields. Unsupported names are removed and returned as warnings. "
+    f"Supported values: {QUAKE_FILTERABLE_FIELDS}."
 )
 
 QUAKE_AGGREGATION_FIELDS = (
@@ -79,6 +86,45 @@ def _put_if_value(payload: dict[str, object], key: str, value: object | None) ->
 def _put_csv(payload: dict[str, object], key: str, value: str | None) -> None:
     if items := split_csv(value):
         payload[key] = items
+
+
+def _filter_service_fields(value: str | None, *, parameter: str) -> tuple[str | None, dict[str, Any] | None]:
+    """Remove Quake fields that the official filterable-fields endpoint does not accept."""
+    requested = split_csv(value) or []
+    accepted = [field for field in requested if field in QUAKE_FILTERABLE_FIELD_SET]
+    removed = [field for field in requested if field not in QUAKE_FILTERABLE_FIELD_SET]
+    warning = None
+    if removed:
+        warning = {
+            "type": "unsupported_filter_fields",
+            "message": f"Removed unsupported Quake {parameter} fields before sending the request.",
+            "details": {
+                "parameter": parameter,
+                "removed_fields": removed,
+                "accepted_fields": accepted,
+                "official_source": "/api/v3/filterable/field/quake_service",
+            },
+        }
+    return (",".join(accepted) or None), warning
+
+
+def _prepare_service_fields(include: str | None, exclude: str | None) -> tuple[str | None, str | None, list[dict[str, Any]]]:
+    prepared_include, include_warning = _filter_service_fields(include, parameter="include")
+    prepared_exclude, exclude_warning = _filter_service_fields(exclude, parameter="exclude")
+    warnings = [warning for warning in (include_warning, exclude_warning) if warning]
+    return prepared_include, prepared_exclude, warnings
+
+
+def _retry_quota_warning(result: dict[str, Any]) -> list[dict[str, Any]]:
+    attempts = result.get("meta", {}).get("attempts", 1)
+    quota_risk = result.get("meta", {}).get("execution", {}).get("quota", {}).get("risk", "none")
+    if not isinstance(attempts, int) or attempts <= 1 or quota_risk == "none":
+        return []
+    return [{
+        "type": "retry_may_consume_quota",
+        "message": "Quake required multiple HTTP attempts and at least one attempt has unknown quota impact.",
+        "details": {"attempts": attempts, "quota_risk": quota_risk},
+    }]
 
 
 def _service_payload(
@@ -163,11 +209,14 @@ async def search_quake_service(
     latest: bool = True,
     start_time: str | None = None,
     end_time: str | None = None,
+    retry_mode: str = "safe_only",
+    force_retry: bool = False,
 ) -> dict[str, Any]:
     """Call Quake real-time service search API."""
     if not _quake_key():
         return _missing_key()
 
+    include, exclude, warnings = _prepare_service_fields(include, exclude)
     payload = _service_payload(
         query=query,
         start=start,
@@ -183,15 +232,23 @@ async def search_quake_service(
         end_time=end_time,
     )
 
-    return await request_json(
+    result = await request_json(
         platform="Quake",
         method="POST",
         url=f"{QUAKE_BASE_URL}/api/v3/search/quake_service",
         rate_limiter=QUAKE_RATE_LIMITER,
+        retry_mode=retry_mode,
+        metered_request=True,
+        force_retry=force_retry,
         headers=_headers(json=True),
         json=payload,
         auth_hint="Authentication failed. Check QUAKE_KEY.",
         forbidden_hint="Access forbidden. Your Quake account may not have sufficient permissions or credits.",
+    )
+    return enrich_payload(
+        result,
+        meta={"original_query": query, "executed_query": query},
+        warnings=[*warnings, *_retry_quota_warning(result)],
     )
 
 
@@ -209,11 +266,14 @@ async def scroll_quake_service(
     latest: bool = True,
     start_time: str | None = None,
     end_time: str | None = None,
+    retry_mode: str = "safe_only",
+    force_retry: bool = False,
 ) -> dict[str, Any]:
     """Call Quake scroll service search API."""
     if not _quake_key():
         return _missing_key()
 
+    include, exclude, warnings = _prepare_service_fields(include, exclude)
     payload = _service_payload(
         query=query,
         size=size,
@@ -229,15 +289,23 @@ async def scroll_quake_service(
         end_time=end_time,
     )
 
-    return await request_json(
+    result = await request_json(
         platform="Quake",
         method="POST",
         url=f"{QUAKE_BASE_URL}/api/v3/scroll/quake_service",
         rate_limiter=QUAKE_RATE_LIMITER,
+        retry_mode=retry_mode,
+        metered_request=True,
+        force_retry=force_retry,
         headers=_headers(json=True),
         json=payload,
         auth_hint="Authentication failed. Check QUAKE_KEY.",
         forbidden_hint="Access forbidden. Your Quake account may not have sufficient permissions or credits.",
+    )
+    return enrich_payload(
+        result,
+        meta={"original_query": query, "executed_query": query},
+        warnings=[*warnings, *_retry_quota_warning(result)],
     )
 
 
@@ -268,6 +336,8 @@ async def aggregate_quake_service(
     latest: bool = True,
     start_time: str | None = None,
     end_time: str | None = None,
+    retry_mode: str = "safe_only",
+    force_retry: bool = False,
 ) -> dict[str, Any]:
     """Call Quake service aggregation API."""
     if not _quake_key():
@@ -300,15 +370,23 @@ async def aggregate_quake_service(
     _put_if_value(payload, "end_time", end_time)
     _put_csv(payload, "ip_list", ip_list)
 
-    return await request_json(
+    result = await request_json(
         platform="Quake",
         method="POST",
         url=f"{QUAKE_BASE_URL}/api/v3/aggregation/quake_service",
         rate_limiter=QUAKE_RATE_LIMITER,
+        retry_mode=retry_mode,
+        metered_request=True,
+        force_retry=force_retry,
         headers=_headers(json=True),
         json=payload,
         auth_hint="Authentication failed. Check QUAKE_KEY.",
         forbidden_hint="Access forbidden. Your Quake account may not have sufficient permissions or credits.",
+    )
+    return enrich_payload(
+        result,
+        meta={"original_query": query, "executed_query": query},
+        warnings=_retry_quota_warning(result),
     )
 
 
@@ -321,8 +399,9 @@ def register_quake_tools(server: MCPServer) -> None:
         description=(
             "Get Quake account details, remaining quota, token status, and role "
             "information. Use this before searches when permissions or credits are "
-            "uncertain. This operation is read-only and is throttled to one call "
-            "every 5 seconds."
+            "uncertain; do not use it for asset discovery. This read-only account "
+            "lookup requires CN_QUAKE_KEY, consumes no search result, and is throttled "
+            "to one call every 5 seconds."
         ),
         annotations=READ_ONLY_REMOTE_TOOL,
     )
@@ -350,9 +429,10 @@ def register_quake_tools(server: MCPServer) -> None:
             "Run a real-time Quake service search using offset pagination. Use this for "
             "small result sets; use quake_service_scroll for deep pagination. This "
             "read-only remote request consumes Quake quota and is throttled to one call "
-            "every 5 seconds."
+            "every 5 seconds. It requires CN_QUAKE_KEY; safe_only never repeats a "
+            "read/write timeout, while force_retry accepts possible duplicate quota use."
         ),
-        annotations=READ_ONLY_REMOTE_TOOL,
+        annotations=METERED_READ_ONLY_REMOTE_TOOL,
     )
     async def quake_service_search(
         query: Annotated[str, Field(description='Quake query, for example service:http or port:443 AND country:"China".')],
@@ -360,13 +440,15 @@ def register_quake_tools(server: MCPServer) -> None:
         size: Annotated[int, Field(ge=1, le=500, description="Number of results to return.")] = 10,
         rule: Annotated[str | None, Field(description="Service data collection rule name for IP-list collections.")] = None,
         ip_list: Annotated[str | None, Field(description="Comma-separated IP list.")] = None,
-        include: Annotated[str | None, Field(description="Comma-separated fields to include.")] = None,
-        exclude: Annotated[str | None, Field(description="Comma-separated fields to exclude.")] = None,
+        include: Annotated[str | None, Field(description=QUAKE_FILTER_FIELDS_DESCRIPTION)] = None,
+        exclude: Annotated[str | None, Field(description=QUAKE_FILTER_FIELDS_DESCRIPTION)] = None,
         shortcuts: Annotated[str | None, Field(description="Comma-separated shortcut filter IDs from the web UI.")] = None,
         ignore_cache: Annotated[bool, Field(description="Whether to ignore cached data.")] = False,
         latest: Annotated[bool, Field(description="Whether to use latest data.")] = True,
         start_time: Annotated[str | None, Field(description="UTC start time, for example 2020-10-14 00:00:00.")] = None,
         end_time: Annotated[str | None, Field(description="UTC end time, for example 2020-10-14 00:00:00.")] = None,
+        retry_mode: Annotated[str, Field(pattern="^(never|safe_only|aggressive)$", description="Retry policy. safe_only never repeats a request after write/read timeout; aggressive may consume quota twice.")] = "safe_only",
+        force_retry: Annotated[bool, Field(description="Repeat a recently indeterminate identical request despite possible duplicate quota use.")] = False,
     ) -> dict[str, Any]:
         return await search_quake_service(
             query=query,
@@ -381,6 +463,8 @@ def register_quake_tools(server: MCPServer) -> None:
             latest=latest,
             start_time=start_time,
             end_time=end_time,
+            retry_mode=retry_mode,
+            force_retry=force_retry,
         )
 
     @server.tool(
@@ -390,9 +474,11 @@ def register_quake_tools(server: MCPServer) -> None:
             "Run a deep-pagination Quake service search using a five-minute cursor. Use "
             "quake_service_search for small offset-based result sets. Pass the returned "
             "meta.pagination_id to the next call; this read-only request consumes quota "
-            "and is throttled to one call every 5 seconds."
+            "and is throttled to one call every 5 seconds. It requires CN_QUAKE_KEY; "
+            "safe_only never repeats a read/write timeout, while force_retry accepts "
+            "possible duplicate quota use."
         ),
-        annotations=READ_ONLY_REMOTE_TOOL,
+        annotations=METERED_READ_ONLY_REMOTE_TOOL,
     )
     async def quake_service_scroll(
         query: Annotated[str, Field(description='Quake query, for example service:http or port:443 AND country:"China".')],
@@ -400,13 +486,15 @@ def register_quake_tools(server: MCPServer) -> None:
         pagination_id: Annotated[str | None, Field(description="Pagination ID from previous response. Expires in 5 minutes.")] = None,
         rule: Annotated[str | None, Field(description="Service data collection rule name for IP-list collections.")] = None,
         ip_list: Annotated[str | None, Field(description="Comma-separated IP list.")] = None,
-        include: Annotated[str | None, Field(description="Comma-separated fields to include.")] = None,
-        exclude: Annotated[str | None, Field(description="Comma-separated fields to exclude.")] = None,
+        include: Annotated[str | None, Field(description=QUAKE_FILTER_FIELDS_DESCRIPTION)] = None,
+        exclude: Annotated[str | None, Field(description=QUAKE_FILTER_FIELDS_DESCRIPTION)] = None,
         shortcuts: Annotated[str | None, Field(description="Comma-separated shortcut filter IDs from the web UI.")] = None,
         ignore_cache: Annotated[bool, Field(description="Whether to ignore cached data.")] = False,
         latest: Annotated[bool, Field(description="Whether to use latest data.")] = True,
         start_time: Annotated[str | None, Field(description="UTC start time, for example 2020-10-14 00:00:00.")] = None,
         end_time: Annotated[str | None, Field(description="UTC end time, for example 2020-10-14 00:00:00.")] = None,
+        retry_mode: Annotated[str, Field(pattern="^(never|safe_only|aggressive)$", description="Retry policy. safe_only never repeats a request after write/read timeout; aggressive may consume quota twice.")] = "safe_only",
+        force_retry: Annotated[bool, Field(description="Repeat a recently indeterminate identical request despite possible duplicate quota use.")] = False,
     ) -> dict[str, Any]:
         return await scroll_quake_service(
             query=query,
@@ -421,6 +509,8 @@ def register_quake_tools(server: MCPServer) -> None:
             latest=latest,
             start_time=start_time,
             end_time=end_time,
+            retry_mode=retry_mode,
+            force_retry=force_retry,
         )
 
     @server.tool(
@@ -431,20 +521,23 @@ def register_quake_tools(server: MCPServer) -> None:
             "quake_service_scroll. Use only for clients that still reference this "
             "legacy name; use quake_service_scroll for all new calls. The operation is "
             "a read-only remote request that consumes Quake quota and is throttled to "
-            "one call every 5 seconds."
+            "one call every 5 seconds. It requires CN_QUAKE_KEY and shares the same "
+            "safe_only and force_retry behavior as quake_service_scroll."
         ),
-        annotations=READ_ONLY_REMOTE_TOOL,
+        annotations=METERED_READ_ONLY_REMOTE_TOOL,
     )
     async def quake_search(
         query: Annotated[str, Field(description='Quake query, for example service:http or port:443 AND country:"China".')],
         size: Annotated[int, Field(ge=1, le=500, description="Results per page.")] = 100,
         pagination_id: Annotated[str | None, Field(description="Pagination ID from previous response.")] = None,
-        include: Annotated[str | None, Field(description="Comma-separated fields to include.")] = None,
-        exclude: Annotated[str | None, Field(description="Comma-separated fields to exclude.")] = None,
+        include: Annotated[str | None, Field(description=QUAKE_FILTER_FIELDS_DESCRIPTION)] = None,
+        exclude: Annotated[str | None, Field(description=QUAKE_FILTER_FIELDS_DESCRIPTION)] = None,
         ignore_cache: Annotated[bool, Field(description="Whether to ignore cached data.")] = False,
         latest: Annotated[bool, Field(description="Whether to use latest data.")] = True,
         start_time: Annotated[str | None, Field(description="UTC start time.")] = None,
         end_time: Annotated[str | None, Field(description="UTC end time.")] = None,
+        retry_mode: Annotated[str, Field(pattern="^(never|safe_only|aggressive)$", description="Retry policy. safe_only never repeats a request after write/read timeout; aggressive may consume quota twice.")] = "safe_only",
+        force_retry: Annotated[bool, Field(description="Repeat a recently indeterminate identical request despite possible duplicate quota use.")] = False,
     ) -> dict[str, Any]:
         return await scroll_quake_service(
             query=query,
@@ -456,6 +549,8 @@ def register_quake_tools(server: MCPServer) -> None:
             latest=latest,
             start_time=start_time,
             end_time=end_time,
+            retry_mode=retry_mode,
+            force_retry=force_retry,
         )
 
     @server.tool(
@@ -478,9 +573,11 @@ def register_quake_tools(server: MCPServer) -> None:
             "Aggregate Quake service matches into buckets for one or two fields. Use "
             "quake_service_search when individual service records are required, and "
             "quake_aggregation_fields to discover valid bucket fields. This read-only "
-            "request consumes quota and is throttled to one call every 5 seconds."
+            "request requires CN_QUAKE_KEY, consumes quota, and is throttled to one call "
+            "every 5 seconds. safe_only never repeats a read/write timeout; force_retry "
+            "accepts possible duplicate quota use."
         ),
-        annotations=READ_ONLY_REMOTE_TOOL,
+        annotations=METERED_READ_ONLY_REMOTE_TOOL,
     )
     async def quake_service_aggregation(
         query: Annotated[str, Field(description='Quake query, for example country:"China".')],
@@ -492,6 +589,8 @@ def register_quake_tools(server: MCPServer) -> None:
         latest: Annotated[bool, Field(description="Whether to use latest data.")] = True,
         start_time: Annotated[str | None, Field(description="UTC start time, for example 2020-10-14 00:00:00.")] = None,
         end_time: Annotated[str | None, Field(description="UTC end time, for example 2020-10-14 00:00:00.")] = None,
+        retry_mode: Annotated[str, Field(pattern="^(never|safe_only|aggressive)$", description="Retry policy. safe_only never repeats a request after write/read timeout; aggressive may consume quota twice.")] = "safe_only",
+        force_retry: Annotated[bool, Field(description="Repeat a recently indeterminate identical request despite possible duplicate quota use.")] = False,
     ) -> dict[str, Any]:
         return await aggregate_quake_service(
             query=query,
@@ -503,6 +602,8 @@ def register_quake_tools(server: MCPServer) -> None:
             latest=latest,
             start_time=start_time,
             end_time=end_time,
+            retry_mode=retry_mode,
+            force_retry=force_retry,
         )
 
 

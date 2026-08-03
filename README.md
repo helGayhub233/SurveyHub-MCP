@@ -3,7 +3,7 @@
 <p align="center">聚合 FOFA、Quake、Hunter、ZoomEye 与 DayDayMap 的空间测绘 MCP Server</p>
 
 <p align="center">
-  <img src="https://badgen.net/pypi/v/surveyhub-mcp?label=PyPI&color=3775A9&cache=300" alt="PyPI v1.18.0"/>
+  <img src="https://badgen.net/pypi/v/surveyhub-mcp?label=PyPI&color=3775A9&cache=300" alt="PyPI v1.19.0"/>
   <img src="https://badgen.net/badge/Python/%3E%3D3.10/3776AB" alt="Python >=3.10"/>
   <img src="https://badgen.net/badge/MCP%20SDK/2.0.0/6F42C1" alt="MCP SDK 2.0.0"/>
   <img src="https://badgen.net/pypi/dm/surveyhub-mcp?label=Downloads&color=2EA44F&cache=86400" alt="PyPI 下载量"/>
@@ -52,8 +52,6 @@ MCP 客户端配置：
         "CN_FOFA_EMAIL": "optional_fofa_email",
         "CN_QUAKE_KEY": "your_quake_key",
         "CN_ZOOMEYE_API_KEY": "your_zoomeye_api_key",
-        "CN_HUNTER_KEY": "fallback_hunter_key",
-        "CN_HUNTER_PERSONAL_KEY": "your_hunter_personal_key",
         "CN_HUNTER_ENTERPRISE_KEY": "your_hunter_enterprise_key",
         "CN_DAYDAYMAP_API_KEY": "your_daydaymap_api_key"
       }
@@ -90,8 +88,6 @@ daydaymap-mcp
         "CN_FOFA_EMAIL": "optional_fofa_email",
         "CN_QUAKE_KEY": "your_quake_key",
         "CN_ZOOMEYE_API_KEY": "your_zoomeye_api_key",
-        "CN_HUNTER_KEY": "fallback_hunter_key",
-        "CN_HUNTER_PERSONAL_KEY": "your_hunter_personal_key",
         "CN_HUNTER_ENTERPRISE_KEY": "your_hunter_enterprise_key",
         "CN_DAYDAYMAP_API_KEY": "your_daydaymap_api_key"
       }
@@ -151,8 +147,6 @@ uv run daydaymap-mcp
         "CN_FOFA_EMAIL": "optional_fofa_email",
         "CN_QUAKE_KEY": "your_quake_key",
         "CN_ZOOMEYE_API_KEY": "your_zoomeye_api_key",
-        "CN_HUNTER_KEY": "fallback_hunter_key",
-        "CN_HUNTER_PERSONAL_KEY": "your_hunter_personal_key",
         "CN_HUNTER_ENTERPRISE_KEY": "your_hunter_enterprise_key",
         "CN_DAYDAYMAP_API_KEY": "your_daydaymap_api_key"
       }
@@ -173,6 +167,32 @@ uv run daydaymap-mcp
 | DayDayMap | `daydaymap-mcp` | `CN_DAYDAYMAP_API_KEY` |
 
 `mcp.json.example` 和 `.env.example` 提供了可直接修改的示例。
+
+### Hunter 版本路由
+
+聚合入口会按 MCP 子进程实际收到的凭据选择 Hunter 工具族：只配置
+`CN_HUNTER_ENTERPRISE_KEY` 时仅暴露 `hunter_enterprise_*`，只配置
+`CN_HUNTER_PERSONAL_KEY` 时仅暴露 `hunter_personal_*`。共享的 `CN_HUNTER_KEY`
+无法表明账户版本，因此会保留两组工具供调用者明确选择；未配置
+Hunter Key 时也会保留两组 schema，用于暴露配置要求。
+
+一般只应选择下列一种配置，不要把占位值同时填入三个变量：
+
+| 账户类型 | 建议配置 | 实际暴露的工具 |
+| --- | --- | --- |
+| Hunter 企业版 | `CN_HUNTER_ENTERPRISE_KEY` | `hunter_enterprise_*` |
+| Hunter 个人版 | `CN_HUNTER_PERSONAL_KEY` | `hunter_personal_*` |
+| 旧版共享配置 | `CN_HUNTER_KEY` | 两组 Hunter 工具 |
+
+同时设置共享 `CN_HUNTER_KEY` 和任一版本专用 Key，也可能使两组工具同时
+出现，因此新配置应优先使用版本专用变量。
+
+如果已配置企业版仍提示未配置，请检查 Key 是否放在 MCP 客户端的
+`mcpServers.<name>.env` 中，而不是只存在于另一个终端。环境变量修改后必须重启
+MCP 子进程。企业版也可直接使用 `hunter-enterprise-mcp`，该入口只暴露
+6 个企业版工具，能进一步避免 Agent 误选个人版。如果仍调用到错误版本，
+返回的 `error.type=wrong_hunter_edition` 和 `error.details.recommended_tool` 会指明已配置版本及
+应改用的工具；不应将该错误概括为“Hunter 未配置”。
 
 ## 环境变量
 
@@ -198,6 +218,9 @@ API Key 获取入口：
 - DayDayMap: `https://www.daydaymap.com`
 
 ## 工具列表
+
+下表是项目的完整能力集，不代表每个运行实例都会暴露全部工具。Hunter 工具会按
+上述凭据版本动态选择，单平台入口则只暴露对应平台的工具。
 
 | 工具名称 | 所属平台 | 说明 |
 | --- | --- | --- |
@@ -228,7 +251,9 @@ API Key 获取入口：
 | `hunter_enterprise_user_info` | Hunter 企业版 | 账号信息 |
 | `daydaymap_search` | DayDayMap | 资产搜索 |
 
-工具返回结构化结果：成功时包含 `ok=true`、`platform` 和 `data` 或 `text`；失败时包含 `ok=false`、`platform` 和 `error`，便于 MCP 客户端区分业务错误、鉴权错误、限流、超时和参数校验失败。
+工具返回结构化结果：成功时包含 `ok=true`、`platform` 和 `data` 或 `text`；失败时包含 `ok=false`、`platform` 和 `error`。`meta.execution` 还会返回 `request_id`、脱敏请求指纹、传输状态、重试安全性、配额风险与数据完整性，便于 AI 区分“确认空结果”与“执行结果未知”。
+
+计费型资产搜索默认使用 `retry_mode=safe_only`：仅在请求确认未发送的连接或连接池失败时自动重试；写入或读取超时会返回 `final_state=indeterminate`，不会自动重发。相同指纹的请求在未知状态后 60 秒内会被请求账本抑制；只有明确接受重复扣费风险时才应设置 `force_retry=true`。
 
 ## 资源提示
 
@@ -255,20 +280,25 @@ API Key 获取入口：
 | FOFA | `fofa_host` | 进程内节流，`1 秒/次` |
 | FOFA | `fofa_search`, `fofa_search_next` | 本地校验，返回 `body` 时 `size <= 500` |
 | FOFA | `fofa_search`, `fofa_search_next` | 本地校验，返回 `cert` 或 `banner` 时 `size <= 2000` |
+| FOFA | `fofa_search`, `fofa_search_next` | 不使用未文档化响应字段控制重试；`full=true` 且供应商未明确确认时，返回 `completeness.state=unknown` |
 | Quake | 全部工具 | 进程内节流，`5 秒/次` |
 | Quake | `quake_service_search`, `quake_service_scroll` | 参数 schema 限制，`size <= 500` |
+| Quake | `quake_service_search`, `quake_service_scroll` | 根据官方可筛选字段清单移除非法 `include/exclude` 字段并返回 warning |
+| Quake | 搜索与聚合工具 | 默认 `safe_only` 仅重试确认未发送的失败；读/写超时不自动重发，`aggressive` 模式的多次 HTTP 尝试会返回可能重复消耗配额的 warning |
 | Quake | `quake_service_aggregation` | 本地校验聚合字段最多 2 个，参数 schema 限制 `size <= 10000` |
 | ZoomEye | `zoomeye_search` | 仅调用付费账号 `POST /v2/search`，参数 schema 限制 `pagesize <= 10000` |
-| Hunter 个人版 | 全部搜索工具 | 进程内节流，`1 秒/次` |
-| Hunter 个人版 | 搜索和批量查询语句 | 默认将 `field="value"` 转为 `field=="value"` 精确查询，可用 `exact_search=false` 保留平台模糊查询 |
+| Hunter 个人版 | 全部搜索工具 | 基于 API Key 的 SQLite 跨进程共享节流，`1 秒/次` |
+| Hunter 个人版 | 搜索和批量查询语句 | 默认将 `field="value"` 转为 `field=="value"` 精确查询；可用 `exact_search=false` 保留平台包含语义 |
 | Hunter 个人版 | 批量任务 | 工具描述提示平台限制：`all <= 10`，`ip/domain/company <= 100` |
-| Hunter 企业版 | 全部搜索工具 | 进程内节流，`1 秒/次` |
-| Hunter 企业版 | 搜索和批量查询语句 | 默认将 `field="value"` 转为 `field=="value"` 精确查询，可用 `exact_search=false` 保留平台模糊查询 |
+| Hunter 企业版 | 全部搜索工具 | 基于 API Key 的 SQLite 跨进程共享节流，`1 秒/次` |
+| Hunter 企业版 | 搜索和批量查询语句 | 默认将 `field="value"` 转为 `field=="value"` 精确查询；可用 `exact_search=false` 保留平台包含语义 |
 | Hunter 企业版 | 批量任务 | 工具描述提示平台限制：`all <= 10`，`ip/domain/company <= 10000` |
 | DayDayMap | `daydaymap_search` | 本地拒绝空白查询；限制 `page <= 10000`、`page_size <= 10000`、`page × page_size <= 10000` |
-| 全部平台 | 全部 HTTP 请求 | 进程内熔断保护，连续 2 次可恢复失败后暂停 15 秒 |
+| 全部平台 | 全部 HTTP 请求 | 进程内熔断保护，连续 3 次可恢复失败后暂停 15 秒 |
 
-FOFA、Quake、Hunter 的频率控制和全部平台的熔断状态是单 MCP 进程内的内存状态；如果同时启动多个 MCP 进程，进程之间不会共享这些状态。
+搜索响应的顶层 `meta` 包含 MCP 实际执行信息，例如 `original_query`、`executed_query`、`attempts` 和 `partial_data`；顶层 `warnings` 保留不会使请求失败、但可能影响完整性的供应商或参数提示。
+
+FOFA 和 Quake 的频率控制、以及全部平台的熔断状态保存在单 MCP 进程内；Hunter 频率控制会按 API Key 通过本地 SQLite 在多个 MCP 进程之间共享。
 
 ## API 文档
 

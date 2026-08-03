@@ -4,6 +4,38 @@ All notable changes to SurveyHub-MCP will be documented in this file.
 
 ## [Unreleased]
 
+## [1.19.0] - 2026-08-03
+
+### Added
+
+- Added top-level response `meta` and `warnings` for executed queries, HTTP attempts, and provider diagnostics.
+- Added `meta.execution` receipts with credential-safe request fingerprints, transport state, retry safety, quota risk, and completeness.
+- Added a SQLite request ledger and short-lived response reuse to suppress duplicate metered searches across MCP processes.
+- Added MCP progress notifications and credential-safe structured execution logs, including legacy `2025-11-25` `logging/setLevel` support.
+- Added local Quake `include`/`exclude` filtering against the official service filterable-fields list.
+- Added a Quake warning when retries may have caused duplicate provider quota consumption.
+
+### Changed
+
+- Hunter searches default to converting `field="value"` into `field=="value"`; callers can set `exact_search=false` to preserve native contains semantics.
+- The aggregate server now exposes only the configured Hunter edition when a version-specific key is present, while retaining both editions for discovery when no Hunter key or only the shared fallback key is configured.
+- Classified HTTP timeouts by pool, connect, write, and read phase; safe mode retries only requests known not to have been sent.
+- Marked metered search tools as non-idempotent and added explicit `retry_mode` and `force_retry` controls.
+- Quake POST searches retry only pre-send failures by default and expose explicit aggressive retry controls.
+- FOFA full-history searches report unverified completeness when no documented acknowledgement exists.
+- Removed FOFA's undocumented `tip` field from retry and completeness decisions.
+- Hunter exact-search normalization now respects quoted strings, escaped quotes, and existing comparison operators.
+- GET downloads now retry bounded timeouts and report their actual HTTP attempt count.
+- MCP cancellation now records metered requests as `failed`, `indeterminate`, or `completed` according to observed transport state.
+
+### Fixed
+
+- Distinguished Hunter Personal and Enterprise credential failures, returned a structured `wrong_hunter_edition` recovery target, and corrected credential hints to use the canonical `CN_` environment variables.
+- Added credential-safe runtime instructions so agents do not report all of Hunter as unavailable when the enterprise edition is configured.
+- Prevented unsupported Quake response fields from failing the entire upstream request.
+- Prevented undocumented FOFA response fields from controlling retries or being treated as completeness evidence.
+- Corrected README documentation for the three-failure circuit-breaker threshold and Hunter's SQLite cross-process rate limiting.
+
 ## [1.18.0] - 2026-07-29
 
 ### Added

@@ -10,10 +10,12 @@ from pydantic import Field
 
 from . import __version__
 from .common import (
+    METERED_READ_ONLY_REMOTE_TOOL,
     READ_ONLY_REMOTE_TOOL,
     AsyncRateLimiter,
     SurveyHubMCPServer,
     encode_base64,
+    enrich_payload,
     error_payload,
     missing_env_message,
     platform_key,
@@ -89,6 +91,52 @@ def _validate_search_size(*, fields: str, size: int) -> dict[str, Any] | None:
     return None
 
 
+async def _request_fofa_search(
+    *,
+    url: str,
+    params: dict[str, str | int | bool],
+    query: str,
+    full: bool,
+    retry_mode: str = "safe_only",
+    force_retry: bool = False,
+) -> dict[str, Any]:
+    """Run one FOFA search without assigning semantics to undocumented fields."""
+    result = await request_json(
+        platform="FOFA",
+        method="GET",
+        url=url,
+        rate_limiter=FOFA_SEARCH_RATE_LIMITER,
+        params=params,
+        retry_mode=retry_mode,
+        metered_request=True,
+        force_retry=force_retry,
+        auth_hint="Authentication failed. Check FOFA_KEY and FOFA_EMAIL if you use it.",
+        forbidden_hint="Access forbidden. Your FOFA account may not have sufficient permissions.",
+    )
+
+    execution = dict(result.get("meta", {}).get("execution", {}))
+    if full and result.get("ok"):
+        execution["completeness"] = {
+            "state": "unknown",
+            "reason": "provider_did_not_acknowledge_full_range",
+        }
+
+    return enrich_payload(
+        result,
+        meta={
+            "original_query": query,
+            "executed_query": query,
+            "partial_data": None,
+            "execution": execution,
+        },
+        warnings=([{
+            "type": "full_range_unverified",
+            "message": "FOFA returned data but did not provide a documented acknowledgement that full-range search was applied.",
+            "details": {"requested_full": True},
+        }] if full and result.get("ok") else None),
+    )
+
+
 async def search_fofa(
     *,
     query: str,
@@ -97,6 +145,8 @@ async def search_fofa(
     fields: str = "host,ip,port,domain,title",
     full: bool = False,
     r_type: str = "json",
+    retry_mode: str = "safe_only",
+    force_retry: bool = False,
 ) -> dict[str, Any]:
     """Call FOFA normal page-based search API."""
     if not _fofa_key():
@@ -115,14 +165,13 @@ async def search_fofa(
         }
     )
 
-    return await request_json(
-        platform="FOFA",
-        method="GET",
+    return await _request_fofa_search(
         url=f"{FOFA_BASE_URL}/api/v1/search/all",
-        rate_limiter=FOFA_SEARCH_RATE_LIMITER,
         params=params,
-        auth_hint="Authentication failed. Check FOFA_KEY and FOFA_EMAIL if you use it.",
-        forbidden_hint="Access forbidden. Your FOFA account may not have sufficient permissions.",
+        query=query,
+        full=full,
+        retry_mode=retry_mode,
+        force_retry=force_retry,
     )
 
 
@@ -134,6 +183,8 @@ async def search_fofa_next(
     fields: str = "host,ip,port,domain,title",
     full: bool = False,
     r_type: str = "json",
+    retry_mode: str = "safe_only",
+    force_retry: bool = False,
 ) -> dict[str, Any]:
     """Call FOFA continuous pagination API."""
     if not _fofa_key():
@@ -153,14 +204,13 @@ async def search_fofa_next(
     if next_id:
         params["next"] = next_id
 
-    return await request_json(
-        platform="FOFA",
-        method="GET",
+    return await _request_fofa_search(
         url=f"{FOFA_BASE_URL}/api/v1/search/next",
-        rate_limiter=FOFA_SEARCH_RATE_LIMITER,
         params=params,
-        auth_hint="Authentication failed. Check FOFA_KEY and FOFA_EMAIL if you use it.",
-        forbidden_hint="Access forbidden. Your FOFA account may not have sufficient permissions.",
+        query=query,
+        full=full,
+        retry_mode=retry_mode,
+        force_retry=force_retry,
     )
 
 
@@ -228,9 +278,12 @@ def register_fofa_tools(server: MCPServer) -> None:
             "Use fofa_search_next for stable continuous pagination over a large result "
             "set, fofa_host for one host, or fofa_search_stats for aggregation. The "
             "query is Base64-encoded automatically; this read-only request consumes "
-            "FOFA account quota and is throttled to one call every 0.6 seconds."
+            "FOFA account quota, requires CN_FOFA_KEY, and is throttled to one call "
+            "every 0.6 seconds. safe_only never repeats a read/write timeout; use "
+            "force_retry only when duplicate quota use is acceptable. full=true is "
+            "reported as unverified unless FOFA explicitly acknowledges its range."
         ),
-        annotations=READ_ONLY_REMOTE_TOOL,
+        annotations=METERED_READ_ONLY_REMOTE_TOOL,
     )
     async def fofa_search(
         query: Annotated[
@@ -242,6 +295,8 @@ def register_fofa_tools(server: MCPServer) -> None:
         fields: Annotated[str, Field(description="Comma-separated return fields.")] = "host,ip,port,domain,title",
         full: Annotated[bool, Field(description="Set true to search all data instead of one-year data.")] = False,
         r_type: Annotated[str, Field(description='Response type. Use "json" for JSON responses.')] = "json",
+        retry_mode: Annotated[str, Field(pattern="^(never|safe_only|aggressive)$", description="Retry policy. safe_only retries only failures known to occur before sending the request; aggressive may duplicate quota use.")] = "safe_only",
+        force_retry: Annotated[bool, Field(description="Repeat a recently indeterminate identical request despite possible duplicate quota use.")] = False,
     ) -> dict[str, Any]:
         return await search_fofa(
             query=query,
@@ -250,6 +305,8 @@ def register_fofa_tools(server: MCPServer) -> None:
             fields=fields,
             full=full,
             r_type=r_type,
+            retry_mode=retry_mode,
+            force_retry=force_retry,
         )
 
     @server.tool(
@@ -259,9 +316,11 @@ def register_fofa_tools(server: MCPServer) -> None:
             "Search FOFA assets using a stable next-token cursor for large result sets. "
             "Use fofa_search for ordinary page-based browsing. Pass the returned next "
             "value as next_id; this read-only request consumes FOFA account quota and "
-            "is throttled to one call every 0.6 seconds."
+            "requires CN_FOFA_KEY. It is throttled to one call every 0.6 seconds; "
+            "safe_only never repeats a read/write timeout, and force_retry accepts "
+            "possible duplicate quota use."
         ),
-        annotations=READ_ONLY_REMOTE_TOOL,
+        annotations=METERED_READ_ONLY_REMOTE_TOOL,
     )
     async def fofa_search_next(
         query: Annotated[str, Field(description="FOFA query to encode as qbase64.")],
@@ -270,6 +329,8 @@ def register_fofa_tools(server: MCPServer) -> None:
         fields: Annotated[str, Field(description="Comma-separated return fields.")] = "host,ip,port,domain,title",
         full: Annotated[bool, Field(description="Set true to search all data instead of one-year data.")] = False,
         r_type: Annotated[str, Field(description='Response type. Use "json" for JSON responses.')] = "json",
+        retry_mode: Annotated[str, Field(pattern="^(never|safe_only|aggressive)$", description="Retry policy. safe_only retries only failures known to occur before sending the request; aggressive may duplicate quota use.")] = "safe_only",
+        force_retry: Annotated[bool, Field(description="Repeat a recently indeterminate identical request despite possible duplicate quota use.")] = False,
     ) -> dict[str, Any]:
         return await search_fofa_next(
             query=query,
@@ -278,6 +339,8 @@ def register_fofa_tools(server: MCPServer) -> None:
             fields=fields,
             full=full,
             r_type=r_type,
+            retry_mode=retry_mode,
+            force_retry=force_retry,
         )
 
     @server.tool(
@@ -289,7 +352,7 @@ def register_fofa_tools(server: MCPServer) -> None:
             "request consumes FOFA quota and is throttled to one call every 5 seconds "
             "in this MCP process."
         ),
-        annotations=READ_ONLY_REMOTE_TOOL,
+        annotations=METERED_READ_ONLY_REMOTE_TOOL,
     )
     async def fofa_search_stats(
         query: Annotated[str, Field(description="FOFA query to encode as qbase64.")],
@@ -308,7 +371,7 @@ def register_fofa_tools(server: MCPServer) -> None:
             "for query-based discovery across multiple assets. This read-only request "
             "consumes FOFA quota and is throttled to one call per second."
         ),
-        annotations=READ_ONLY_REMOTE_TOOL,
+        annotations=METERED_READ_ONLY_REMOTE_TOOL,
     )
     async def fofa_host(
         host: Annotated[str, Field(description="Host name or IP address, usually an IP.")],
@@ -320,9 +383,11 @@ def register_fofa_tools(server: MCPServer) -> None:
         name="fofa_user_info",
         title="Inspect FOFA Account and Remaining Quota",
         description=(
-            "Get FOFA account status, remaining quota, and membership information. "
-            "Use this before searches when account capacity or permissions are uncertain. "
-            "This operation is read-only."
+            "Inspect the configured FOFA account's status, remaining query quota, and "
+            "membership details. Use this before fofa_search, fofa_search_next, or "
+            "fofa_search_stats when authorization or capacity is uncertain; do not use "
+            "it for asset discovery. This read-only operation requires configured FOFA "
+            "credentials, retrieves only account metadata, and performs no asset search."
         ),
         annotations=READ_ONLY_REMOTE_TOOL,
     )

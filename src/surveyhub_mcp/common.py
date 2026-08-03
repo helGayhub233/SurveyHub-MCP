@@ -6,25 +6,44 @@ import asyncio
 import base64
 import hashlib
 import json
+import logging
 import os
 import random
 import sqlite3
 import time
+import uuid
+from contextlib import closing
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Annotated, Any, Callable
+from typing import Annotated, Any, Callable, Literal
 
 import httpx
 from mcp.server import MCPServer
-from mcp.types import CallToolResult, TextContent, ToolAnnotations
+from mcp.types import (
+    CallToolResult,
+    EmptyResult,
+    LoggingMessageNotification,
+    LoggingMessageNotificationParams,
+    SetLevelRequestParams,
+    TextContent,
+    ToolAnnotations,
+)
 from pydantic import BaseModel, ConfigDict, Field
 
 READ_ONLY_REMOTE_TOOL = ToolAnnotations(
     read_only_hint=True,
     destructive_hint=False,
     idempotent_hint=True,
+    open_world_hint=True,
+)
+METERED_READ_ONLY_REMOTE_TOOL = ToolAnnotations(
+    read_only_hint=True,
+    destructive_hint=False,
+    # A search does not mutate provider data, but replaying it can consume quota.
+    idempotent_hint=False,
     open_world_hint=True,
 )
 MUTATING_REMOTE_TOOL = ToolAnnotations(
@@ -39,6 +58,104 @@ LOCAL_FILE_WRITE_TOOL = ToolAnnotations(
     idempotent_hint=False,
     open_world_hint=True,
 )
+
+_LOGGER = logging.getLogger(__name__)
+_LOG_LEVELS = ("debug", "info", "notice", "warning", "error", "critical", "alert", "emergency")
+_LOG_LEVEL_STATE_KEY = "surveyhub.logging.level"
+
+
+@dataclass
+class _MCPExecutionState:
+    """Request-scoped MCP notification state shared by nested provider calls."""
+
+    context: Any
+    progress: float = 0
+
+
+_CURRENT_MCP_EXECUTION: ContextVar[_MCPExecutionState | None] = ContextVar(
+    "surveyhub_mcp_execution",
+    default=None,
+)
+
+
+async def _execution_context_middleware(context: Any, call_next: Any) -> Any:
+    """Expose the current tool request to the provider execution pipeline."""
+    if context.method != "tools/call":
+        return await call_next(context)
+    token = _CURRENT_MCP_EXECUTION.set(_MCPExecutionState(context=context))
+    try:
+        return await call_next(context)
+    finally:
+        _CURRENT_MCP_EXECUTION.reset(token)
+
+
+def _connection_for(context: Any) -> Any | None:
+    """Return SDK connection state without exposing it in public tool schemas."""
+    return getattr(context.session, "_connection", None)
+
+
+def _log_level_enabled(context: Any, level: str) -> bool:
+    """Apply legacy connection-level or modern request-level log filtering."""
+    session = context.session
+    if session.protocol_version >= "2026-07-28":
+        return level in getattr(session, "_allowed_log_levels", ())
+    connection = _connection_for(context)
+    configured = connection.state.get(_LOG_LEVEL_STATE_KEY, "warning") if connection else "warning"
+    try:
+        return _LOG_LEVELS.index(level) >= _LOG_LEVELS.index(configured)
+    except ValueError:
+        return level in {"warning", "error", "critical", "alert", "emergency"}
+
+
+class ExecutionReporter:
+    """Emit best-effort progress and credential-safe structured MCP logs."""
+
+    def __init__(self, *, platform: str, request_id: str) -> None:
+        self.platform = platform
+        self.request_id = request_id
+
+    async def event(
+        self,
+        event: str,
+        message: str,
+        *,
+        level: str = "info",
+        report_progress: bool = True,
+        **details: Any,
+    ) -> None:
+        state = _CURRENT_MCP_EXECUTION.get()
+        if state is None:
+            return
+        context = state.context
+        if report_progress:
+            state.progress += 1
+            try:
+                await context.session.report_progress(state.progress, message=message)
+            except Exception as error:  # Notifications must never fail the provider operation.
+                _LOGGER.debug("Unable to publish MCP progress: %s", error)
+
+        if not _log_level_enabled(context, level):
+            return
+        payload = {
+            "event": event,
+            "platform": self.platform,
+            "request_id": self.request_id,
+            **details,
+        }
+        try:
+            await context.session.send_notification(
+                LoggingMessageNotification(
+                    params=LoggingMessageNotificationParams(
+                        level=level,
+                        data=payload,
+                        logger="surveyhub.execution",
+                    )
+                ),
+                related_request_id=context.request_id,
+            )
+        except Exception as error:  # Logging must remain observational.
+            _LOGGER.debug("Unable to publish structured MCP log: %s", error)
+
 
 class SurveyHubError(BaseModel):
     """Normalized error details returned by every SurveyHub provider."""
@@ -61,6 +178,76 @@ class SurveyHubDownload(BaseModel):
     path: str = Field(description="Expanded local path of the saved export.")
 
 
+class SurveyHubWarning(BaseModel):
+    """Non-fatal provider or compatibility warning."""
+
+    model_config = ConfigDict(extra="allow")
+
+    type: str = Field(description="Stable machine-readable warning category.")
+    message: str = Field(description="Human-readable warning and its effect on the result.")
+    details: dict[str, Any] | None = Field(default=None, description="Additional warning context.")
+
+
+class SurveyHubRetryDecision(BaseModel):
+    """Whether replaying the effective provider request is safe."""
+
+    safety: Literal["safe", "conditional", "unsafe"]
+    recommended: bool
+    reason: str
+
+
+class SurveyHubQuotaRisk(BaseModel):
+    """Possible provider quota effect of the observed attempts."""
+
+    risk: Literal["none", "possible_duplicate", "unknown"]
+    charged_attempts: int | Literal["unknown"]
+
+
+class SurveyHubCompleteness(BaseModel):
+    """Whether the returned asset set can be treated as complete."""
+
+    state: Literal["complete", "partial", "unknown"]
+    reason: str
+
+
+class SurveyHubExecution(BaseModel):
+    """Machine-readable execution receipt used by agents to avoid unsafe retries."""
+
+    request_id: str
+    fingerprint: str | None = None
+    duplicate_of: str | None = None
+    cache_hit: bool = False
+    final_state: Literal["confirmed_success", "confirmed_failure", "indeterminate"]
+    transport_state: Literal["not_sent", "possibly_sent", "response_received"]
+    attempts: int = Field(ge=0)
+    timeout_phase: Literal["pool", "connect", "write", "read", "unknown"] | None = None
+    retry: SurveyHubRetryDecision
+    quota: SurveyHubQuotaRisk
+    completeness: SurveyHubCompleteness
+
+
+class SurveyHubMeta(BaseModel):
+    """Execution metadata added by the MCP wrapper."""
+
+    model_config = ConfigDict(extra="allow")
+
+    original_query: str | None = Field(default=None, description="Query supplied by the caller.")
+    executed_query: str | None = Field(default=None, description="Query sent to the provider.")
+    attempts: int | None = Field(
+        default=None,
+        ge=0,
+        description="HTTP attempts used by this invocation; 0 means a recent identical response was reused.",
+    )
+    partial_data: bool | None = Field(default=None, description="Whether provider warnings indicate incomplete data.")
+    execution: SurveyHubExecution | None = Field(
+        default=None,
+        description=(
+            "Machine-readable transport, retry-safety, quota-risk, and completeness receipt. "
+            "Treat final_state=indeterminate as unknown rather than an empty result."
+        ),
+    )
+
+
 class SurveyHubResponse(BaseModel):
     """Unified success, error, and download envelope for SurveyHub tools."""
 
@@ -72,6 +259,8 @@ class SurveyHubResponse(BaseModel):
     text: str | None = Field(default=None, description="Provider text response when JSON is unavailable.")
     error: SurveyHubError | None = Field(default=None, description="Normalized failure details.")
     download: SurveyHubDownload | None = Field(default=None, description="Local export metadata.")
+    warnings: list[SurveyHubWarning] | None = Field(default=None, description="Non-fatal provider or wrapper warnings.")
+    meta: SurveyHubMeta | None = Field(default=None, description="MCP execution metadata.")
 
 
 StructuredToolResult = Annotated[CallToolResult, SurveyHubResponse]
@@ -82,13 +271,48 @@ def validated_payload(payload: dict[str, Any]) -> dict[str, Any]:
     return SurveyHubResponse.model_validate(payload).model_dump(exclude_none=True)
 
 
+def enrich_payload(
+    payload: dict[str, Any],
+    *,
+    meta: dict[str, Any] | None = None,
+    warnings: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Merge execution metadata and non-fatal warnings into a response."""
+    enriched = dict(payload)
+    if meta:
+        enriched["meta"] = {**enriched.get("meta", {}), **meta}
+    if warnings:
+        enriched["warnings"] = [*enriched.get("warnings", []), *warnings]
+    return validated_payload(enriched)
+
+
 class SurveyHubMCPServer(MCPServer):
     """MCP server that advertises the unified Pydantic output contract."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.middleware.append(_execution_context_middleware)
+
+        async def set_logging_level(context: Any, params: SetLevelRequestParams) -> EmptyResult:
+            connection = _connection_for(context)
+            if connection is not None:
+                connection.state[_LOG_LEVEL_STATE_KEY] = params.level
+            return EmptyResult()
+
+        # MCPServer has no high-level decorator for the legacy 2025-11-25
+        # logging method. Registering the typed handler also advertises the
+        # logging capability; 2026-07-28 clients use request-level opt-in.
+        self._lowlevel_server.add_request_handler(
+            "logging/setLevel",
+            SetLevelRequestParams,
+            set_logging_level,
+        )
 
     async def list_tools(self):
         tools = await super().list_tools()
         output_schema = SurveyHubResponse.model_json_schema(mode="serialization")
         return [tool.model_copy(update={"output_schema": output_schema}) for tool in tools]
+
 
 @dataclass(frozen=True)
 class HttpPolicy:
@@ -374,6 +598,8 @@ class AsyncCircuitBreaker:
 
 
 _CIRCUIT_BREAKERS: dict[str, AsyncCircuitBreaker] = {}
+_METERED_RESPONSE_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+METERED_RESPONSE_CACHE_TTL = 60.0
 
 
 def _circuit_breaker_for(platform: str) -> AsyncCircuitBreaker:
@@ -419,25 +645,75 @@ HUNTER_EXACT_SEARCH_EXCLUDED_FIELDS = {"after", "before"}
 
 
 def normalize_hunter_query(query: str, *, exact_search: bool = True) -> str:
-    """Use Hunter exact string comparisons by default.
+    """Convert Hunter contains comparisons to exact comparisons by default.
 
-    Hunter treats field="value" as a fuzzy contains query. For MCP callers, the
-    safer default is field=="value"; callers can opt out for native fuzzy search.
+    Callers can explicitly set exact_search=False when Hunter's native
+    field="value" contains semantics are required.
     """
     if not exact_search:
         return query
 
-    import re
+    def quoted_end(start: int) -> int:
+        index = start + 1
+        while index < len(query):
+            if query[index] == "\\":
+                index += 2
+                continue
+            if query[index] == '"':
+                return index + 1
+            index += 1
+        return len(query)
 
-    pattern = re.compile(r"(?P<field>[A-Za-z][\w.-]*)\s*=(?!=)\s*\"")
+    output: list[str] = []
+    index = 0
+    while index < len(query):
+        char = query[index]
+        if char == '"':
+            end = quoted_end(index)
+            output.append(query[index:end])
+            index = end
+            continue
+        if not ("A" <= char <= "Z" or "a" <= char <= "z"):
+            output.append(char)
+            index += 1
+            continue
 
-    def replace(match: re.Match[str]) -> str:
-        field = match.group("field")
-        if field in HUNTER_EXACT_SEARCH_EXCLUDED_FIELDS:
-            return match.group(0)
-        return f'{field}=="'
+        field_end = index + 1
+        while field_end < len(query):
+            candidate = query[field_end]
+            if candidate.isalnum() or candidate in "_.-":
+                field_end += 1
+                continue
+            break
 
-    return pattern.sub(replace, query)
+        field = query[index:field_end]
+        operator = field_end
+        while operator < len(query) and query[operator].isspace():
+            operator += 1
+        value_start = operator + 1
+        while value_start < len(query) and query[value_start].isspace():
+            value_start += 1
+
+        is_contains_comparison = (
+            operator < len(query)
+            and query[operator] == "="
+            and (operator + 1 >= len(query) or query[operator + 1] != "=")
+            and value_start < len(query)
+            and query[value_start] == '"'
+        )
+        if not is_contains_comparison:
+            output.append(field)
+            index = field_end
+            continue
+
+        value_end = quoted_end(value_start)
+        output.append(field)
+        output.append(query[field_end:operator])
+        output.append("=" if field in HUNTER_EXACT_SEARCH_EXCLUDED_FIELDS else "==")
+        output.append(query[operator + 1:value_end])
+        index = value_end
+
+    return "".join(output)
 
 
 def split_csv(value: str | None) -> list[str] | None:
@@ -464,15 +740,19 @@ def mcp_tool_result(payload: dict[str, Any]) -> CallToolResult:
     )
 
 
-def response_payload(*, platform: str, response: httpx.Response) -> dict[str, Any]:
+def response_payload(*, platform: str, response: httpx.Response, attempts: int = 1) -> dict[str, Any]:
     """Return an MCP-friendly structured payload for successful HTTP responses."""
     if not response.content:
-        return validated_payload({"ok": True, "platform": platform, "data": None})
+        return validated_payload({"ok": True, "platform": platform, "data": None, "meta": {"attempts": attempts}})
 
     try:
-        return validated_payload({"ok": True, "platform": platform, "data": response.json()})
+        return validated_payload(
+            {"ok": True, "platform": platform, "data": response.json(), "meta": {"attempts": attempts}}
+        )
     except ValueError:
-        return validated_payload({"ok": True, "platform": platform, "text": response.text})
+        return validated_payload(
+            {"ok": True, "platform": platform, "text": response.text, "meta": {"attempts": attempts}}
+        )
 
 
 def error_payload(
@@ -679,6 +959,16 @@ def _retry_delay(
                     rate_limit_policy=rate_limit_policy,
                 )
 
+    return _retry_backoff_delay(attempt, http_policy=http_policy, rate_limit_policy=rate_limit_policy)
+
+
+def _retry_backoff_delay(
+    attempt: int,
+    *,
+    http_policy: HttpPolicy = DEFAULT_HTTP_POLICY,
+    rate_limit_policy: RateLimitPolicy = DEFAULT_RATE_LIMIT_POLICY,
+) -> float:
+    """Return capped exponential backoff with jitter when no response headers exist."""
     base_delay = http_policy.retry_base_delay * (2**attempt)
     return _cap_retry_delay(
         base_delay + random.uniform(0.0, base_delay * 0.25),
@@ -700,6 +990,157 @@ def _response_code(body: Any) -> int | None:
 
 def _can_retry_method(method: str, retry_non_idempotent: bool) -> bool:
     return retry_non_idempotent or method.upper() in {"GET", "HEAD", "OPTIONS", "PUT", "DELETE"}
+
+
+SAFE_RETRY_EXCEPTIONS = (httpx.PoolTimeout, httpx.ConnectTimeout, httpx.ConnectError)
+
+
+def _timeout_decision(error: BaseException) -> dict[str, Any]:
+    """Describe what is known about a timed-out request without guessing provider execution."""
+    if isinstance(error, httpx.PoolTimeout):
+        return {"phase": "pool", "transport_state": "not_sent", "safety": "safe", "quota_risk": "none"}
+    if isinstance(error, (httpx.ConnectTimeout, httpx.ConnectError)):
+        return {"phase": "connect", "transport_state": "not_sent", "safety": "safe", "quota_risk": "none"}
+    if isinstance(error, httpx.WriteTimeout):
+        return {"phase": "write", "transport_state": "possibly_sent", "safety": "unsafe", "quota_risk": "possible_duplicate"}
+    if isinstance(error, httpx.ReadTimeout):
+        return {"phase": "read", "transport_state": "possibly_sent", "safety": "unsafe", "quota_risk": "possible_duplicate"}
+    return {"phase": "unknown", "transport_state": "possibly_sent", "safety": "unsafe", "quota_risk": "unknown"}
+
+
+def _execution_receipt(
+    *,
+    request_id: str,
+    fingerprint: str | None,
+    final_state: str,
+    transport_state: str,
+    attempts: int,
+    retry_safety: str,
+    retry_recommended: bool,
+    reason: str,
+    quota_risk: str,
+    completeness: str,
+    phase: str | None = None,
+    duplicate_of: str | None = None,
+    cache_hit: bool = False,
+) -> dict[str, Any]:
+    receipt: dict[str, Any] = {
+        "request_id": request_id,
+        "final_state": final_state,
+        "transport_state": transport_state,
+        "attempts": attempts,
+        "retry": {"safety": retry_safety, "recommended": retry_recommended, "reason": reason},
+        "quota": {
+            "risk": quota_risk,
+            "charged_attempts": attempts if final_state == "confirmed_success" and transport_state == "response_received" else "unknown",
+        },
+        "completeness": {"state": completeness, "reason": reason},
+        "cache_hit": cache_hit,
+    }
+    if fingerprint:
+        receipt["fingerprint"] = fingerprint
+    if phase:
+        receipt["timeout_phase"] = phase
+    if duplicate_of:
+        receipt["duplicate_of"] = duplicate_of
+    return receipt
+
+
+def _safe_fingerprint_value(value: Any) -> Any:
+    """Remove credential-shaped values before hashing request identity."""
+    if isinstance(value, dict):
+        return {
+            str(key): _safe_fingerprint_value(item)
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+            if str(key).lower() not in {"key", "email", "authorization", "x-quaketoken", "api-key", "apikey"}
+        }
+    if isinstance(value, (list, tuple)):
+        return [_safe_fingerprint_value(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return type(value).__name__
+
+
+def request_fingerprint(platform: str, method: str, url: str, request_kwargs: dict[str, Any]) -> str:
+    identity = {
+        "platform": platform,
+        "method": method.upper(),
+        "url": url,
+        "request": _safe_fingerprint_value(request_kwargs),
+    }
+    canonical = json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+class RequestLedger:
+    """Cross-process short-lived ledger for metered requests with indeterminate outcomes."""
+
+    def __init__(self, state_dir: Path | None = None, *, ttl: float = 60.0) -> None:
+        self._state_dir = state_dir or _request_state_dir()
+        self._database_path = self._state_dir / "requests.sqlite3"
+        self._ttl = ttl
+
+    def begin(self, fingerprint: str, request_id: str, *, force: bool = False) -> dict[str, Any] | None:
+        now = time.time()
+        with closing(self._connect()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT request_id, state, updated_at FROM request_ledger WHERE fingerprint = ?",
+                (fingerprint,),
+            ).fetchone()
+            if row and not force and now - float(row[2]) <= self._ttl and row[1] == "completed":
+                connection.commit()
+                return {"request_id": row[0], "state": row[1]}
+            if row and not force and now - float(row[2]) <= self._ttl and row[1] in {"started", "indeterminate"}:
+                connection.commit()
+                return {"request_id": row[0], "state": row[1]}
+            connection.execute(
+                """
+                INSERT INTO request_ledger (fingerprint, request_id, state, updated_at)
+                VALUES (?, ?, 'started', ?)
+                ON CONFLICT(fingerprint) DO UPDATE SET
+                    request_id=excluded.request_id, state='started', updated_at=excluded.updated_at
+                """,
+                (fingerprint, request_id, now),
+            )
+            connection.execute("DELETE FROM request_ledger WHERE updated_at < ?", (now - 86400.0,))
+            connection.commit()
+        return None
+
+    def finish(self, fingerprint: str, request_id: str, state: str) -> None:
+        with closing(self._connect()) as connection:
+            connection.execute(
+                "UPDATE request_ledger SET state = ?, updated_at = ? WHERE fingerprint = ? AND request_id = ?",
+                (state, time.time(), fingerprint, request_id),
+            )
+
+    def _connect(self) -> sqlite3.Connection:
+        self._state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(self._state_dir, 0o700)
+        descriptor = os.open(self._database_path, os.O_CREAT | os.O_RDWR, 0o600)
+        os.close(descriptor)
+        connection = sqlite3.connect(self._database_path, timeout=5.0, isolation_level=None)
+        connection.execute("PRAGMA busy_timeout = 5000")
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS request_ledger (
+                fingerprint TEXT PRIMARY KEY,
+                request_id TEXT NOT NULL,
+                state TEXT NOT NULL,
+                updated_at REAL NOT NULL
+            )
+            """
+        )
+        os.chmod(self._database_path, 0o600)
+        return connection
+
+
+def _request_state_dir() -> Path:
+    configured = os.getenv("SURVEYHUB_STATE_DIR")
+    if configured:
+        return Path(configured).expanduser() / "requests"
+    cache_home = Path(os.getenv("XDG_CACHE_HOME", Path.home() / ".cache"))
+    return cache_home / "surveyhub-mcp" / "requests"
 
 
 def _remaining_budget(deadline: float) -> float:
@@ -738,17 +1179,67 @@ async def request_json(
     rate_limiter: AsyncRateLimiter | None = None,
     retryable_body_codes: set[int] | None = None,
     retry_non_idempotent: bool = False,
+    retry_mode: str = "safe_only",
+    metered_request: bool = False,
+    force_retry: bool = False,
     http_policy: HttpPolicy = DEFAULT_HTTP_POLICY,
     **kwargs: Any,
 ) -> dict[str, Any]:
     """Send an HTTP request and return a JSON or error text response.
 
-    Automatically retries on HTTP 429 (rate-limit) with exponential backoff.
+    By default, retries only failures known to happen before a request was sent.
+    Metered requests receive a stable fingerprint and duplicate suppression after
+    an indeterminate outcome.
     """
+    if retry_mode not in {"never", "safe_only", "aggressive"}:
+        return error_payload(
+            platform=platform,
+            message='retry_mode must be "never", "safe_only", or "aggressive".',
+            error_type="validation_error",
+            details={"retry_mode": retry_mode},
+        )
+
+    request_id = str(uuid.uuid4())
+    reporter = ExecutionReporter(platform=platform, request_id=request_id)
+    fingerprint = request_fingerprint(platform, method, url, kwargs) if metered_request else None
+    ledger = RequestLedger() if fingerprint else None
+    if fingerprint and not force_retry:
+        now = time.monotonic()
+        for key, (cached_at, _) in list(_METERED_RESPONSE_CACHE.items()):
+            if now - cached_at > METERED_RESPONSE_CACHE_TTL:
+                _METERED_RESPONSE_CACHE.pop(key, None)
+        cached = _METERED_RESPONSE_CACHE.get(fingerprint)
+        if cached:
+            await reporter.event(
+                "cache_hit",
+                f"Reused a recent identical {platform} response without another provider request.",
+                cache_hit=True,
+                attempts=0,
+            )
+            cached_response = cached[1]
+            prior_execution = cached_response.get("meta", {}).get("execution", {})
+            prior_completeness = prior_execution.get("completeness", {})
+            return enrich_payload(
+                cached_response,
+                meta={"attempts": 0, "execution": _execution_receipt(
+                    request_id=request_id, fingerprint=fingerprint,
+                    final_state="confirmed_success", transport_state="response_received", attempts=0,
+                    retry_safety="safe", retry_recommended=False, reason="recent_identical_response_cache_hit",
+                    quota_risk="none", completeness=prior_completeness.get("state", "complete"),
+                    duplicate_of=prior_execution.get("request_id"), cache_hit=True,
+                )},
+            )
     circuit_breaker = _circuit_breaker_for(platform)
     deadline = time.monotonic() + http_policy.total_timeout
+    accumulated_quota_risk = "none"
     allowed, retry_after = await circuit_breaker.allow_request()
     if not allowed:
+        await reporter.event(
+            "circuit_open",
+            f"Skipped {platform} because its circuit breaker is open.",
+            level="warning",
+            retry_after_seconds=max(1, int(retry_after)),
+        )
         return error_payload(
             platform=platform,
             message=_circuit_open_message(platform, retry_after),
@@ -756,17 +1247,67 @@ async def request_json(
             details={"retry_after_seconds": max(1, int(retry_after))},
         )
 
+    if ledger and fingerprint:
+        duplicate = await asyncio.to_thread(ledger.begin, fingerprint, request_id, force=force_retry)
+        if duplicate:
+            reason = (
+                "A matching metered request completed recently in another process."
+                if duplicate["state"] == "completed"
+                else "A matching metered request is still running or recently ended without a response."
+            )
+            await reporter.event(
+                "duplicate_suppressed",
+                f"Suppressed an identical metered {platform} request to avoid possible duplicate quota use.",
+                level="warning",
+                duplicate_of=duplicate["request_id"],
+                prior_state=duplicate["state"],
+            )
+            return enrich_payload(
+                error_payload(
+                    platform=platform,
+                    message=f"Duplicate request suppressed. {reason} Use force_retry=true only if duplicate quota use is acceptable.",
+                    error_type="duplicate_request_suppressed",
+                ),
+                meta={
+                    "execution": _execution_receipt(
+                        request_id=request_id,
+                        fingerprint=fingerprint,
+                        final_state="confirmed_success" if duplicate["state"] == "completed" else "indeterminate",
+                        transport_state="response_received" if duplicate["state"] == "completed" else "possibly_sent",
+                        attempts=0,
+                        retry_safety="unsafe",
+                        retry_recommended=False,
+                        reason=reason,
+                        quota_risk="possible_duplicate" if duplicate["state"] != "completed" else "none",
+                        completeness="complete" if duplicate["state"] == "completed" else "unknown",
+                        duplicate_of=duplicate["request_id"],
+                    )
+                },
+            )
+
+    request_dispatched = False
+    response_received = False
     for attempt in range(http_policy.max_attempts):
         try:
+            request_dispatched = accumulated_quota_risk != "none"
+            response_received = False
+            await reporter.event(
+                "attempt_started",
+                f"Starting {platform} provider attempt {attempt + 1}/{http_policy.max_attempts}.",
+                attempt=attempt + 1,
+                max_attempts=http_policy.max_attempts,
+            )
             remaining = _remaining_budget(deadline)
             if rate_limiter:
                 await asyncio.wait_for(rate_limiter.wait(), timeout=remaining)
             attempt_timeout = min(http_policy.attempt_timeout, _remaining_budget(deadline))
             async with httpx.AsyncClient(timeout=attempt_timeout) as client:
+                request_dispatched = True
                 response = await asyncio.wait_for(
                     client.request(method, url, **kwargs),
                     timeout=_remaining_budget(deadline),
                 )
+                response_received = True
                 response.raise_for_status()
                 if retryable_body_codes:
                     try:
@@ -775,25 +1316,105 @@ async def request_json(
                         body = None
                     body_code = _response_code(body)
                     if body_code in retryable_body_codes:
+                        response_received = False
                         delay = _retry_delay(response, attempt, http_policy=http_policy)
+                        await reporter.event(
+                            "retry_scheduled",
+                            f"{platform} returned a retryable provider code; waiting before retry.",
+                            level="warning",
+                            attempt=attempt + 1,
+                            delay_seconds=delay,
+                            reason="provider_rate_limit_response",
+                        )
                         await _publish_retry_delay(rate_limiter, delay, deadline=deadline)
-                        if attempt + 1 < http_policy.max_attempts and _can_retry_method(method, retry_non_idempotent):
+                        if attempt + 1 < http_policy.max_attempts and retry_mode != "never":
+                            accumulated_quota_risk = "unknown"
                             continue
                         await circuit_breaker.record_neutral()
-                        return error_payload(
-                            platform=platform,
-                            message=str(body.get("message") or f"{platform} API rate limit exceeded."),
-                            error_type="rate_limit",
-                            status_code=int(body_code),
-                            details={"provider_response": body},
+                        if ledger and fingerprint:
+                            await asyncio.to_thread(ledger.finish, fingerprint, request_id, "completed")
+                        return enrich_payload(
+                            error_payload(
+                                platform=platform,
+                                message=str(body.get("message") or f"{platform} API rate limit exceeded."),
+                                error_type="rate_limit",
+                                status_code=int(body_code),
+                                details={"provider_response": body},
+                            ),
+                            meta={"execution": _execution_receipt(
+                                request_id=request_id, fingerprint=fingerprint,
+                                final_state="confirmed_failure", transport_state="response_received",
+                                attempts=attempt + 1, retry_safety="conditional", retry_recommended=True,
+                                reason="provider_rate_limit_response", quota_risk="unknown", completeness="unknown",
+                            )},
                         )
                 await circuit_breaker.record_success()
-                return response_payload(platform=platform, response=response)
+                success_result = enrich_payload(
+                    response_payload(platform=platform, response=response, attempts=attempt + 1),
+                    meta={
+                        "execution": _execution_receipt(
+                            request_id=request_id,
+                            fingerprint=fingerprint,
+                            final_state="confirmed_success",
+                            transport_state="response_received",
+                            attempts=attempt + 1,
+                            retry_safety="safe",
+                            retry_recommended=False,
+                            reason="provider_response_received",
+                            quota_risk=accumulated_quota_risk,
+                            completeness="complete",
+                        )
+                    },
+                )
+                if ledger and fingerprint:
+                    await asyncio.to_thread(ledger.finish, fingerprint, request_id, "completed")
+                    _METERED_RESPONSE_CACHE[fingerprint] = (time.monotonic(), success_result)
+                await reporter.event(
+                    "request_completed",
+                    f"Received and validated the {platform} provider response.",
+                    attempt=attempt + 1,
+                    attempts=attempt + 1,
+                )
+                return success_result
+        except asyncio.CancelledError:
+            if ledger and fingerprint:
+                await asyncio.shield(
+                    asyncio.to_thread(
+                        ledger.finish,
+                        fingerprint,
+                        request_id,
+                        "completed" if response_received else ("indeterminate" if request_dispatched else "failed"),
+                    )
+                )
+            await asyncio.shield(
+                reporter.event(
+                    "request_cancelled",
+                    f"The {platform} request was cancelled by the MCP client.",
+                    level="warning",
+                    attempt=attempt + 1,
+                    transport_state=(
+                        "response_received"
+                        if response_received
+                        else ("possibly_sent" if request_dispatched else "not_sent")
+                    ),
+                )
+            )
+            raise
         except httpx.HTTPStatusError as error:
             if error.response.status_code == 429:
+                response_received = False
                 delay = _retry_delay(error.response, attempt, http_policy=http_policy)
+                await reporter.event(
+                    "retry_scheduled",
+                    f"{platform} returned HTTP 429; waiting before retry.",
+                    level="warning",
+                    attempt=attempt + 1,
+                    delay_seconds=delay,
+                    reason="http_429",
+                )
                 await _publish_retry_delay(rate_limiter, delay, deadline=deadline)
-                if attempt + 1 < http_policy.max_attempts and _can_retry_method(method, retry_non_idempotent):
+                if attempt + 1 < http_policy.max_attempts and retry_mode != "never":
+                    accumulated_quota_risk = "unknown"
                     continue
             if error.response.status_code == 429:
                 await circuit_breaker.record_neutral()
@@ -801,49 +1422,227 @@ async def request_json(
                 await circuit_breaker.record_failure()
             else:
                 await circuit_breaker.record_success()
-            return format_http_error(
-                platform=platform,
-                error=error,
-                auth_hint=auth_hint,
-                forbidden_hint=forbidden_hint,
+            if ledger and fingerprint:
+                await asyncio.to_thread(ledger.finish, fingerprint, request_id, "completed")
+            await reporter.event(
+                "request_failed",
+                f"{platform} returned HTTP {error.response.status_code}.",
+                level="warning",
+                attempt=attempt + 1,
+                status_code=error.response.status_code,
+                reason="provider_http_error",
             )
-        except httpx.TimeoutException:
+            return enrich_payload(
+                format_http_error(
+                    platform=platform,
+                    error=error,
+                    auth_hint=auth_hint,
+                    forbidden_hint=forbidden_hint,
+                ),
+                meta={"attempts": attempt + 1, "execution": _execution_receipt(
+                    request_id=request_id, fingerprint=fingerprint,
+                    final_state="confirmed_failure", transport_state="response_received",
+                    attempts=attempt + 1,
+                    retry_safety="conditional" if error.response.status_code in {429, 502, 503, 504} else "unsafe",
+                    retry_recommended=error.response.status_code in {429, 502, 503, 504},
+                    reason=f"provider_http_{error.response.status_code}", quota_risk="unknown", completeness="unknown",
+                )},
+            )
+        except httpx.TimeoutException as error:
+            decision = _timeout_decision(error)
+            retry_allowed = (
+                retry_mode == "aggressive"
+                or (retry_mode == "safe_only" and isinstance(error, SAFE_RETRY_EXCEPTIONS))
+            )
+            if attempt + 1 < http_policy.max_attempts and retry_allowed:
+                if decision["transport_state"] == "possibly_sent":
+                    accumulated_quota_risk = "possible_duplicate"
+                delay = _retry_backoff_delay(attempt, http_policy=http_policy)
+                await reporter.event(
+                    "retry_scheduled",
+                    f"{platform} failed before a response; scheduling a policy-approved retry.",
+                    level="warning",
+                    attempt=attempt + 1,
+                    delay_seconds=delay,
+                    reason=f"{decision['phase']}_timeout",
+                    retry_safety=decision["safety"],
+                )
+                await _publish_retry_delay(rate_limiter, delay, deadline=deadline)
+                continue
             await circuit_breaker.record_failure()
-            return error_payload(
-                platform=platform,
-                message=f"Request timeout: {platform} API did not respond within {http_policy.attempt_timeout:.0f} seconds.",
-                error_type="timeout",
+            if ledger and fingerprint:
+                await asyncio.to_thread(
+                    ledger.finish,
+                    fingerprint,
+                    request_id,
+                    "indeterminate" if decision["transport_state"] == "possibly_sent" else "failed",
+                )
+            reason = (
+                "server_may_have_processed_request"
+                if decision["transport_state"] == "possibly_sent"
+                else "request_was_not_sent"
+            )
+            await reporter.event(
+                "request_timed_out",
+                f"{platform} timed out during the {decision['phase']} phase.",
+                level="warning",
+                attempt=attempt + 1,
+                timeout_phase=decision["phase"],
+                retry_safety=decision["safety"],
+                transport_state=decision["transport_state"],
+            )
+            return enrich_payload(
+                error_payload(
+                    platform=platform,
+                    message=f"Request timeout during {decision['phase']} phase. Retry safety is {decision['safety']}.",
+                    error_type="timeout",
+                    details={"attempts": attempt + 1, "timeout_phase": decision["phase"]},
+                ),
+                meta={
+                    "attempts": attempt + 1,
+                    "execution": _execution_receipt(
+                        request_id=request_id,
+                        fingerprint=fingerprint,
+                        final_state=(
+                            "indeterminate" if decision["transport_state"] == "possibly_sent" else "confirmed_failure"
+                        ),
+                        transport_state=decision["transport_state"],
+                        attempts=attempt + 1,
+                        retry_safety=decision["safety"],
+                        retry_recommended=decision["safety"] == "safe",
+                        reason=reason,
+                        quota_risk=decision["quota_risk"],
+                        completeness="unknown",
+                        phase=decision["phase"],
+                    )
+                },
             )
         except (asyncio.TimeoutError, TotalRequestTimeout):
-            return error_payload(
-                platform=platform,
-                message=f"{platform} request exceeded the {http_policy.total_timeout:.0f}-second total time budget.",
-                error_type="total_timeout",
-                details={"total_timeout_seconds": http_policy.total_timeout},
+            if ledger and fingerprint:
+                await asyncio.to_thread(ledger.finish, fingerprint, request_id, "indeterminate")
+            await reporter.event(
+                "total_timeout",
+                f"{platform} exhausted its total request time budget.",
+                level="error",
+                attempt=attempt + 1,
+                total_timeout_seconds=http_policy.total_timeout,
+                transport_state="possibly_sent",
+            )
+            return enrich_payload(
+                error_payload(
+                    platform=platform,
+                    message=f"{platform} request exceeded the {http_policy.total_timeout:.0f}-second total time budget.",
+                    error_type="total_timeout",
+                    details={"total_timeout_seconds": http_policy.total_timeout},
+                ),
+                meta={"attempts": attempt + 1, "execution": _execution_receipt(
+                    request_id=request_id, fingerprint=fingerprint,
+                    final_state="indeterminate", transport_state="possibly_sent", attempts=attempt + 1,
+                    retry_safety="unsafe", retry_recommended=False, reason="total_budget_exhausted_execution_unknown",
+                    quota_risk="possible_duplicate", completeness="unknown", phase="unknown",
+                )},
             )
         except RateLimitQueueTimeout as error:
-            return error_payload(
-                platform=platform,
-                message=f"{platform} request waited too long for the shared rate-limit queue.",
-                error_type="rate_limit_queue_timeout",
-                details={"queue_timeout_seconds": error.timeout},
+            if ledger and fingerprint:
+                await asyncio.to_thread(ledger.finish, fingerprint, request_id, "failed")
+            await reporter.event(
+                "rate_limit_queue_timeout",
+                f"{platform} waited too long in the local rate-limit queue.",
+                level="warning",
+                attempt=attempt,
+                queue_timeout_seconds=error.timeout,
+                transport_state="not_sent",
+            )
+            return enrich_payload(
+                error_payload(
+                    platform=platform,
+                    message=f"{platform} request waited too long for the shared rate-limit queue.",
+                    error_type="rate_limit_queue_timeout",
+                    details={"queue_timeout_seconds": error.timeout},
+                ),
+                meta={"execution": _execution_receipt(
+                    request_id=request_id, fingerprint=fingerprint,
+                    final_state="confirmed_failure", transport_state="not_sent", attempts=attempt,
+                    retry_safety="safe", retry_recommended=True, reason="local_rate_limit_queue_timeout",
+                    quota_risk="none", completeness="unknown",
+                )},
             )
         except ProviderCooldownActive as error:
-            return error_payload(
-                platform=platform,
-                message=f"{platform} is rate limited; retry after the shared cooldown.",
-                error_type="rate_limit_cooldown",
-                status_code=429,
-                details={"retry_after_seconds": max(1, int(error.retry_after))},
+            if ledger and fingerprint:
+                await asyncio.to_thread(ledger.finish, fingerprint, request_id, "failed")
+            await reporter.event(
+                "provider_cooldown",
+                f"{platform} remains inside a shared provider cooldown.",
+                level="warning",
+                attempt=attempt,
+                retry_after_seconds=max(1, int(error.retry_after)),
+                transport_state="not_sent",
+            )
+            return enrich_payload(
+                error_payload(
+                    platform=platform,
+                    message=f"{platform} is rate limited; retry after the shared cooldown.",
+                    error_type="rate_limit_cooldown",
+                    status_code=429,
+                    details={"retry_after_seconds": max(1, int(error.retry_after))},
+                ),
+                meta={"execution": _execution_receipt(
+                    request_id=request_id, fingerprint=fingerprint,
+                    final_state="confirmed_failure", transport_state="not_sent", attempts=attempt,
+                    retry_safety="safe", retry_recommended=True, reason="local_provider_cooldown",
+                    quota_risk="none", completeness="unknown",
+                )},
             )
         except httpx.RequestError as error:
+            safe_failure = isinstance(error, httpx.ConnectError)
+            if safe_failure and retry_mode != "never" and attempt + 1 < http_policy.max_attempts:
+                delay = _retry_backoff_delay(attempt, http_policy=http_policy)
+                await reporter.event(
+                    "retry_scheduled",
+                    f"{platform} connection failed before send; scheduling a safe retry.",
+                    level="warning",
+                    attempt=attempt + 1,
+                    delay_seconds=delay,
+                    reason="connection_failed_before_send",
+                    retry_safety="safe",
+                )
+                await _publish_retry_delay(rate_limiter, delay, deadline=deadline)
+                continue
             await circuit_breaker.record_failure()
-            return error_payload(
-                platform=platform,
-                message=f"Error querying {platform}: {type(error).__name__}: {error}",
-                error_type="request_error",
+            if ledger and fingerprint:
+                await asyncio.to_thread(ledger.finish, fingerprint, request_id, "failed" if safe_failure else "indeterminate")
+            await reporter.event(
+                "request_failed",
+                f"{platform} failed before a confirmed provider response.",
+                level="warning",
+                attempt=attempt + 1,
+                reason="connection_failed_before_send" if safe_failure else "request_execution_unknown",
+                transport_state="not_sent" if safe_failure else "possibly_sent",
+            )
+            return enrich_payload(
+                error_payload(
+                    platform=platform,
+                    message=f"Error querying {platform}: {type(error).__name__}: {error}",
+                    error_type="request_error",
+                ),
+                meta={"attempts": attempt + 1, "execution": _execution_receipt(
+                    request_id=request_id, fingerprint=fingerprint,
+                    final_state="confirmed_failure" if safe_failure else "indeterminate",
+                    transport_state="not_sent" if safe_failure else "possibly_sent", attempts=attempt + 1,
+                    retry_safety="safe" if safe_failure else "unsafe", retry_recommended=safe_failure,
+                    reason="connection_failed_before_send" if safe_failure else "request_execution_unknown",
+                    quota_risk="none" if safe_failure else "unknown", completeness="unknown",
+                    phase="connect" if safe_failure else "unknown",
+                )},
             )
         except Exception as error:
+            await reporter.event(
+                "unexpected_error",
+                f"{platform} failed with an unexpected internal error.",
+                level="error",
+                attempt=attempt + 1,
+                error_type=type(error).__name__,
+            )
             return error_payload(
                 platform=platform,
                 message=f"Error querying {platform}: {type(error).__name__}: {error}",
@@ -866,12 +1665,20 @@ async def request_download(
 ) -> dict[str, Any]:
     """Send an HTTP request and save the response body to a local file.
 
-    Automatically retries on HTTP 429 (rate-limit) with exponential backoff.
+    Automatically retries GET timeouts and HTTP 429 responses with exponential backoff.
     """
+    request_id = str(uuid.uuid4())
+    reporter = ExecutionReporter(platform=platform, request_id=request_id)
     circuit_breaker = _circuit_breaker_for(platform)
     deadline = time.monotonic() + http_policy.total_timeout
     allowed, retry_after = await circuit_breaker.allow_request()
     if not allowed:
+        await reporter.event(
+            "circuit_open",
+            f"Skipped the {platform} download because its circuit breaker is open.",
+            level="warning",
+            retry_after_seconds=max(1, int(retry_after)),
+        )
         return error_payload(
             platform=platform,
             message=_circuit_open_message(platform, retry_after),
@@ -881,6 +1688,12 @@ async def request_download(
 
     for attempt in range(http_policy.max_attempts):
         try:
+            await reporter.event(
+                "download_attempt_started",
+                f"Starting {platform} download attempt {attempt + 1}/{http_policy.max_attempts}.",
+                attempt=attempt + 1,
+                max_attempts=http_policy.max_attempts,
+            )
             remaining = _remaining_budget(deadline)
             if rate_limiter:
                 await asyncio.wait_for(rate_limiter.wait(), timeout=remaining)
@@ -901,6 +1714,14 @@ async def request_download(
                     body_code = _response_code(body)
                     if retryable_body_codes and body_code in retryable_body_codes:
                         delay = _retry_delay(response, attempt, http_policy=http_policy)
+                        await reporter.event(
+                            "retry_scheduled",
+                            f"{platform} returned a retryable download response; waiting before retry.",
+                            level="warning",
+                            attempt=attempt + 1,
+                            delay_seconds=delay,
+                            reason="provider_rate_limit_response",
+                        )
                         await _publish_retry_delay(rate_limiter, delay, deadline=deadline)
                         if attempt + 1 < http_policy.max_attempts:
                             continue
@@ -913,23 +1734,48 @@ async def request_download(
                             details={"provider_response": body},
                         )
                     await circuit_breaker.record_success()
-                    return response_payload(platform=platform, response=response)
+                    return response_payload(platform=platform, response=response, attempts=attempt + 1)
 
                 path = Path(output_path).expanduser()
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(response.content)
                 await circuit_breaker.record_success()
+                await reporter.event(
+                    "download_completed",
+                    f"Saved the {platform} export to local storage.",
+                    attempt=attempt + 1,
+                    bytes=len(response.content),
+                )
                 return validated_payload({
                     "ok": True,
                     "platform": platform,
+                    "meta": {"attempts": attempt + 1},
                     "download": {
                         "bytes": len(response.content),
                         "path": str(path),
                     },
                 })
+        except asyncio.CancelledError:
+            await asyncio.shield(
+                reporter.event(
+                    "download_cancelled",
+                    f"The {platform} download was cancelled by the MCP client.",
+                    level="warning",
+                    attempt=attempt + 1,
+                )
+            )
+            raise
         except httpx.HTTPStatusError as error:
             if error.response.status_code == 429:
                 delay = _retry_delay(error.response, attempt, http_policy=http_policy)
+                await reporter.event(
+                    "retry_scheduled",
+                    f"{platform} returned HTTP 429 during download; waiting before retry.",
+                    level="warning",
+                    attempt=attempt + 1,
+                    delay_seconds=delay,
+                    reason="http_429",
+                )
                 await _publish_retry_delay(rate_limiter, delay, deadline=deadline)
                 if attempt + 1 < http_policy.max_attempts:
                     continue
@@ -946,11 +1792,25 @@ async def request_download(
                 forbidden_hint=forbidden_hint,
             )
         except httpx.TimeoutException:
+            if attempt + 1 < http_policy.max_attempts and _can_retry_method(method, False):
+                delay = _retry_backoff_delay(attempt, http_policy=http_policy)
+                await reporter.event(
+                    "retry_scheduled",
+                    f"{platform} download timed out; scheduling a safe GET retry.",
+                    level="warning",
+                    attempt=attempt + 1,
+                    delay_seconds=delay,
+                    reason="download_timeout",
+                    retry_safety="safe",
+                )
+                await _publish_retry_delay(rate_limiter, delay, deadline=deadline)
+                continue
             await circuit_breaker.record_failure()
             return error_payload(
                 platform=platform,
                 message=f"Request timeout: {platform} API did not respond within {http_policy.attempt_timeout:.0f} seconds.",
                 error_type="timeout",
+                details={"attempts": attempt + 1},
             )
         except (asyncio.TimeoutError, TotalRequestTimeout):
             return error_payload(
