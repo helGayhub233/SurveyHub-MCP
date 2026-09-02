@@ -10,6 +10,7 @@ All notable changes to SurveyHub-MCP will be documented in this file.
 - Search tool descriptions now declare each platform's asset-correlation pivot syntax (domain/IP/ICP/icon/TLS) and instruct probing remaining quota via the matching user_info tool before metered calls.
 - Aggregate server instructions now embed a multi-source discovery workflow: the domain -> IP -> ICP -> icon hash -> TLS fingerprint correlation chain, runtime platform configuration status, quota pre-check guidance, and the DayDayMap error-2004 caveat (no user_info tool).
 - The surveyhub_search_plan prompt now emits a multi-platform correlation plan covering source selection, quota probes, seed queries, cross-platform pivoting, and de-duplication.
+- Quake tools now cover the official host-data API family and similar-icon aggregation added upstream in 2026: quake_host_filterable_fields, quake_host_search, quake_host_scroll, quake_host_aggregation_fields, quake_host_aggregation, and quake_similar_icon (MD5 favicon + similarity threshold). Host include/exclude fields are validated against the host filterable list; host payloads omit the service-only latest field.
 
 ### Added
 

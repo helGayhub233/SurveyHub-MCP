@@ -57,6 +57,24 @@ QUAKE_AGGREGATION_FIELDS = (
     "city, city_cn, district, district_cn, province_of_china"
 )
 
+QUAKE_HOST_FILTERABLE_FIELDS = (
+    "location.owner, location.street_cn, location.country_cn, org, hostname, ip, "
+    "time, location.gps, location.province_en, location.province_cn, "
+    "location.street_en, location.city_cn, location.country_en, asn, "
+    "location.city_en"
+)
+QUAKE_HOST_FILTERABLE_FIELD_SET = frozenset(field.strip() for field in QUAKE_HOST_FILTERABLE_FIELDS.split(","))
+QUAKE_HOST_FILTER_FIELDS_DESCRIPTION = (
+    "Comma-separated official Quake host-data fields. Unsupported names are removed and returned as warnings. "
+    f"Supported values: {QUAKE_HOST_FILTERABLE_FIELDS}."
+)
+
+QUAKE_HOST_AGGREGATION_FIELDS = (
+    "ip, port, service, product, os, asn, org, isp, province, province_cn, "
+    "country, country_cn, country_code, city, city_cn, district, district_cn, "
+    "province_of_china"
+)
+
 QUAKE_RATE_LIMITER = AsyncRateLimiter(5.0)
 
 
@@ -90,11 +108,13 @@ def _put_csv(payload: dict[str, object], key: str, value: str | None) -> None:
         payload[key] = items
 
 
-def _filter_service_fields(value: str | None, *, parameter: str) -> tuple[str | None, dict[str, Any] | None]:
-    """Remove Quake fields that the official filterable-fields endpoint does not accept."""
+def _filter_fields(
+    value: str | None, *, parameter: str, accepted: frozenset[str], source: str
+) -> tuple[str | None, dict[str, Any] | None]:
+    """Remove fields that the official Quake filterable-fields endpoint does not accept."""
     requested = split_csv(value) or []
-    accepted = [field for field in requested if field in QUAKE_FILTERABLE_FIELD_SET]
-    removed = [field for field in requested if field not in QUAKE_FILTERABLE_FIELD_SET]
+    kept = [field for field in requested if field in accepted]
+    removed = [field for field in requested if field not in accepted]
     warning = None
     if removed:
         warning = {
@@ -103,16 +123,43 @@ def _filter_service_fields(value: str | None, *, parameter: str) -> tuple[str | 
             "details": {
                 "parameter": parameter,
                 "removed_fields": removed,
-                "accepted_fields": accepted,
-                "official_source": "/api/v3/filterable/field/quake_service",
+                "accepted_fields": kept,
+                "official_source": source,
             },
         }
-    return (",".join(accepted) or None), warning
+    return (",".join(kept) or None), warning
 
 
 def _prepare_service_fields(include: str | None, exclude: str | None) -> tuple[str | None, str | None, list[dict[str, Any]]]:
-    prepared_include, include_warning = _filter_service_fields(include, parameter="include")
-    prepared_exclude, exclude_warning = _filter_service_fields(exclude, parameter="exclude")
+    prepared_include, include_warning = _filter_fields(
+        include,
+        parameter="include",
+        accepted=QUAKE_FILTERABLE_FIELD_SET,
+        source="/api/v3/filterable/field/quake_service",
+    )
+    prepared_exclude, exclude_warning = _filter_fields(
+        exclude,
+        parameter="exclude",
+        accepted=QUAKE_FILTERABLE_FIELD_SET,
+        source="/api/v3/filterable/field/quake_service",
+    )
+    warnings = [warning for warning in (include_warning, exclude_warning) if warning]
+    return prepared_include, prepared_exclude, warnings
+
+
+def _prepare_host_fields(include: str | None, exclude: str | None) -> tuple[str | None, str | None, list[dict[str, Any]]]:
+    prepared_include, include_warning = _filter_fields(
+        include,
+        parameter="include",
+        accepted=QUAKE_HOST_FILTERABLE_FIELD_SET,
+        source="/api/v3/filterable/field/quake_host",
+    )
+    prepared_exclude, exclude_warning = _filter_fields(
+        exclude,
+        parameter="exclude",
+        accepted=QUAKE_HOST_FILTERABLE_FIELD_SET,
+        source="/api/v3/filterable/field/quake_host",
+    )
     warnings = [warning for warning in (include_warning, exclude_warning) if warning]
     return prepared_include, prepared_exclude, warnings
 
@@ -390,6 +437,276 @@ async def aggregate_quake_service(
         meta={"original_query": query, "executed_query": query},
         warnings=_retry_quota_warning(result),
     )
+def _host_payload(
+    *,
+    query: str,
+    size: int | None = None,
+    start: int | None = None,
+    pagination_id: str | None = None,
+    rule: str | None = None,
+    ip_list: str | None = None,
+    include: str | None = None,
+    exclude: str | None = None,
+    ignore_cache: bool = False,
+    start_time: str | None = None,
+    end_time: str | None = None,
+) -> dict[str, object]:
+    payload: dict[str, object] = {"query": query, "ignore_cache": ignore_cache}
+    _put_if_value(payload, "size", size)
+    _put_if_value(payload, "start", start)
+    _put_if_value(payload, "pagination_id", pagination_id)
+    _put_if_value(payload, "rule", rule)
+    _put_if_value(payload, "start_time", start_time)
+    _put_if_value(payload, "end_time", end_time)
+    _put_csv(payload, "ip_list", ip_list)
+    _put_csv(payload, "include", include)
+    _put_csv(payload, "exclude", exclude)
+    return payload
+
+
+async def get_quake_host_filterable_fields() -> dict[str, Any]:
+    """Call Quake host-data filterable fields API."""
+    if not _quake_key():
+        return _missing_key()
+
+    return await request_json(
+        platform="Quake",
+        method="GET",
+        url=f"{QUAKE_BASE_URL}/api/v3/filterable/field/quake_host",
+        rate_limiter=QUAKE_RATE_LIMITER,
+        headers=_headers(),
+        auth_hint="Authentication failed. Check QUAKE_KEY.",
+        forbidden_hint="Access forbidden. Your Quake account may not have sufficient permissions.",
+    )
+
+
+async def search_quake_host(
+    *,
+    query: str,
+    start: int = 0,
+    size: int = 10,
+    rule: str | None = None,
+    ip_list: str | None = None,
+    include: str | None = None,
+    exclude: str | None = None,
+    ignore_cache: bool = False,
+    start_time: str | None = None,
+    end_time: str | None = None,
+    retry_mode: str = "safe_only",
+    force_retry: bool = False,
+) -> dict[str, Any]:
+    """Call Quake real-time host-data search API."""
+    if not _quake_key():
+        return _missing_key()
+
+    include, exclude, warnings = _prepare_host_fields(include, exclude)
+    payload = _host_payload(
+        query=query,
+        start=start,
+        size=size,
+        rule=rule,
+        ip_list=ip_list,
+        include=include,
+        exclude=exclude,
+        ignore_cache=ignore_cache,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    result = await request_json(
+        platform="Quake",
+        method="POST",
+        url=f"{QUAKE_BASE_URL}/api/v3/search/quake_host",
+        rate_limiter=QUAKE_RATE_LIMITER,
+        retry_mode=retry_mode,
+        metered_request=True,
+        force_retry=force_retry,
+        headers=_headers(json=True),
+        json=payload,
+        auth_hint="Authentication failed. Check QUAKE_KEY.",
+        forbidden_hint="Access forbidden. Your Quake account may not have sufficient permissions or credits.",
+    )
+    return enrich_payload(
+        result,
+        meta={"original_query": query, "executed_query": query},
+        warnings=[*warnings, *_retry_quota_warning(result)],
+    )
+
+
+async def scroll_quake_host(
+    *,
+    query: str,
+    size: int = 100,
+    pagination_id: str | None = None,
+    rule: str | None = None,
+    ip_list: str | None = None,
+    include: str | None = None,
+    exclude: str | None = None,
+    ignore_cache: bool = False,
+    start_time: str | None = None,
+    end_time: str | None = None,
+    retry_mode: str = "safe_only",
+    force_retry: bool = False,
+) -> dict[str, Any]:
+    """Call Quake deep-pagination host-data search API."""
+    if not _quake_key():
+        return _missing_key()
+
+    include, exclude, warnings = _prepare_host_fields(include, exclude)
+    payload = _host_payload(
+        query=query,
+        size=size,
+        pagination_id=pagination_id,
+        rule=rule,
+        ip_list=ip_list,
+        include=include,
+        exclude=exclude,
+        ignore_cache=ignore_cache,
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    result = await request_json(
+        platform="Quake",
+        method="POST",
+        url=f"{QUAKE_BASE_URL}/api/v3/scroll/quake_host",
+        rate_limiter=QUAKE_RATE_LIMITER,
+        retry_mode=retry_mode,
+        metered_request=True,
+        force_retry=force_retry,
+        headers=_headers(json=True),
+        json=payload,
+        auth_hint="Authentication failed. Check QUAKE_KEY.",
+        forbidden_hint="Access forbidden. Your Quake account may not have sufficient permissions or credits.",
+    )
+    return enrich_payload(
+        result,
+        meta={"original_query": query, "executed_query": query},
+        warnings=[*warnings, *_retry_quota_warning(result)],
+    )
+
+
+async def get_quake_host_aggregation_fields() -> dict[str, Any]:
+    """Call Quake host-data aggregation fields API."""
+    if not _quake_key():
+        return _missing_key()
+
+    return await request_json(
+        platform="Quake",
+        method="GET",
+        url=f"{QUAKE_BASE_URL}/api/v3/aggregation/quake_host",
+        rate_limiter=QUAKE_RATE_LIMITER,
+        headers=_headers(),
+        auth_hint="Authentication failed. Check QUAKE_KEY.",
+        forbidden_hint="Access forbidden. Your Quake account may not have sufficient permissions.",
+    )
+
+
+async def aggregate_quake_host(
+    *,
+    query: str,
+    aggregation_list: str,
+    size: int = 5,
+    rule: str | None = None,
+    ip_list: str | None = None,
+    ignore_cache: bool = False,
+    start_time: str | None = None,
+    end_time: str | None = None,
+    retry_mode: str = "safe_only",
+    force_retry: bool = False,
+) -> dict[str, Any]:
+    """Call Quake host-data aggregation API."""
+    if not _quake_key():
+        return _missing_key()
+
+    aggregations = split_csv(aggregation_list)
+    if not aggregations:
+        return error_payload(
+            platform="Quake",
+            message="aggregation_list is required. Provide one or two comma-separated host aggregation fields.",
+            error_type="validation_error",
+        )
+    if len(aggregations) > 2:
+        return error_payload(
+            platform="Quake",
+            message="aggregation_list supports at most two fields.",
+            error_type="validation_error",
+            details={"aggregation_list": aggregation_list},
+        )
+
+    payload: dict[str, object] = {
+        "query": query,
+        "size": size,
+        "ignore_cache": ignore_cache,
+        "aggregation_list": aggregations,
+    }
+    _put_if_value(payload, "rule", rule)
+    _put_if_value(payload, "start_time", start_time)
+    _put_if_value(payload, "end_time", end_time)
+    _put_csv(payload, "ip_list", ip_list)
+
+    result = await request_json(
+        platform="Quake",
+        method="POST",
+        url=f"{QUAKE_BASE_URL}/api/v3/aggregation/quake_host",
+        rate_limiter=QUAKE_RATE_LIMITER,
+        retry_mode=retry_mode,
+        metered_request=True,
+        force_retry=force_retry,
+        headers=_headers(json=True),
+        json=payload,
+        auth_hint="Authentication failed. Check QUAKE_KEY.",
+        forbidden_hint="Access forbidden. Your Quake account may not have sufficient permissions or credits.",
+    )
+    return enrich_payload(
+        result,
+        meta={"original_query": query, "executed_query": query},
+        warnings=_retry_quota_warning(result),
+    )
+
+
+async def aggregate_quake_similar_icon(
+    *,
+    favicon_hash: str,
+    similar: float = 0.9,
+    size: int = 10,
+    ignore_cache: bool = False,
+    start_time: str | None = None,
+    end_time: str | None = None,
+    retry_mode: str = "safe_only",
+    force_retry: bool = False,
+) -> dict[str, Any]:
+    """Call Quake favicon similarity aggregation API."""
+    if not _quake_key():
+        return _missing_key()
+
+    payload: dict[str, object] = {
+        "favicon_hash": favicon_hash,
+        "similar": similar,
+        "size": size,
+        "ignore_cache": ignore_cache,
+    }
+    _put_if_value(payload, "start_time", start_time)
+    _put_if_value(payload, "end_time", end_time)
+
+    result = await request_json(
+        platform="Quake",
+        method="POST",
+        url=f"{QUAKE_BASE_URL}/api/v3/query/similar_icon/aggregation",
+        rate_limiter=QUAKE_RATE_LIMITER,
+        retry_mode=retry_mode,
+        metered_request=True,
+        force_retry=force_retry,
+        headers=_headers(json=True),
+        json=payload,
+        auth_hint="Authentication failed. Check QUAKE_KEY.",
+        forbidden_hint="Access forbidden. Your Quake account may not have sufficient permissions or credits.",
+    )
+    return enrich_payload(
+        result,
+        meta={"original_favicon_hash": favicon_hash, "favicon_hash": favicon_hash},
+        warnings=_retry_quota_warning(result),
+    )
 
 
 def register_quake_tools(server: MCPServer) -> None:
@@ -611,6 +928,195 @@ def register_quake_tools(server: MCPServer) -> None:
             ip_list=ip_list,
             ignore_cache=ignore_cache,
             latest=latest,
+            start_time=start_time,
+            end_time=end_time,
+            retry_mode=retry_mode,
+            force_retry=force_retry,
+        ))
+
+    @server.tool(
+        name="quake_host_filterable_fields",
+        title="List Quake Host-Data Search Filter Fields",
+        description=(
+            "List Quake host-data fields accepted by the include and exclude parameters of "
+            "quake_host_search and quake_host_scroll. Use quake_host_aggregation_fields "
+            "instead when choosing an aggregation_list field, and quake_filterable_fields "
+            "for service-data queries. This operation is read-only and is throttled to one "
+            "call every 5 seconds."
+        ),
+        annotations=READ_ONLY_REMOTE_TOOL,
+    )
+    async def quake_host_filterable_fields(    ) -> StructuredToolResult:
+        return mcp_tool_result(await get_quake_host_filterable_fields())
+
+    @server.tool(
+        name="quake_host_search",
+        title="Search Quake Hosts with Offset Pagination",
+        description=(
+            "Run a real-time Quake host-data search using offset pagination. Each result is "
+            "one host with location, org, asn, and hostname data, suitable for organization "
+            "exposure mapping; use quake_service_search for per-port service records, and "
+            "quake_host_scroll for deep pagination. Host correlation pivots use ip:, org:, "
+            "hostname:, and location fields joined with AND/OR/NOT; rule and ip_list query a "
+            "saved IP-list collection. This read-only request consumes Quake quota and is "
+            "throttled to one call every 5 seconds; when remaining quota is unknown in a "
+            "multi-source scan, call quake_user_info first. It requires CN_QUAKE_KEY; "
+            "safe_only never repeats a read/write timeout, while force_retry accepts "
+            "possible duplicate quota use."
+        ),
+        annotations=METERED_READ_ONLY_REMOTE_TOOL,
+    )
+    async def quake_host_search(
+        query: Annotated[str, Field(description='Quake query, for example org:"Example Inc" or ip:"1.1.1.1/24".')],
+        start: Annotated[int, Field(ge=0, description="Result start offset.")] = 0,
+        size: Annotated[int, Field(ge=1, le=500, description="Number of results to return.")] = 10,
+        rule: Annotated[str | None, Field(description="Host-data collection rule name for IP-list collections.")] = None,
+        ip_list: Annotated[str | None, Field(description="Comma-separated IP list.")] = None,
+        include: Annotated[str | None, Field(description=QUAKE_HOST_FILTER_FIELDS_DESCRIPTION)] = None,
+        exclude: Annotated[str | None, Field(description=QUAKE_HOST_FILTER_FIELDS_DESCRIPTION)] = None,
+        ignore_cache: Annotated[bool, Field(description="Whether to ignore cached data.")] = False,
+        start_time: Annotated[str | None, Field(description="UTC start time, for example 2020-10-14 00:00:00.")] = None,
+        end_time: Annotated[str | None, Field(description="UTC end time, for example 2020-10-14 00:00:00.")] = None,
+        retry_mode: Annotated[str, Field(pattern="^(never|safe_only|aggressive)$", description="Retry policy. safe_only never repeats a request after write/read timeout; aggressive may consume quota twice.")] = "safe_only",
+        force_retry: Annotated[bool, Field(description="Repeat a recently indeterminate identical request despite possible duplicate quota use.")] = False,
+    ) -> StructuredToolResult:
+        return mcp_tool_result(await search_quake_host(
+            query=query,
+            start=start,
+            size=size,
+            rule=rule,
+            ip_list=ip_list,
+            include=include,
+            exclude=exclude,
+            ignore_cache=ignore_cache,
+            start_time=start_time,
+            end_time=end_time,
+            retry_mode=retry_mode,
+            force_retry=force_retry,
+        ))
+
+    @server.tool(
+        name="quake_host_scroll",
+        title="Search Quake Hosts with Cursor Pagination",
+        description=(
+            "Run a deep-pagination Quake host-data search using a five-minute cursor. Use "
+            "quake_host_search for small offset-based result sets. Pass the returned "
+            "meta.pagination_id to the next call; this read-only request consumes quota "
+            "and is throttled to one call every 5 seconds. It requires CN_QUAKE_KEY; "
+            "safe_only never repeats a read/write timeout, while force_retry accepts "
+            "possible duplicate quota use."
+        ),
+        annotations=METERED_READ_ONLY_REMOTE_TOOL,
+    )
+    async def quake_host_scroll(
+        query: Annotated[str, Field(description='Quake query, for example org:"Example Inc" or ip:"1.1.1.1/24".')],
+        size: Annotated[int, Field(ge=1, le=500, description="Results per page.")] = 100,
+        pagination_id: Annotated[str | None, Field(description="Pagination ID from previous response. Expires in 5 minutes.")] = None,
+        rule: Annotated[str | None, Field(description="Host-data collection rule name for IP-list collections.")] = None,
+        ip_list: Annotated[str | None, Field(description="Comma-separated IP list.")] = None,
+        include: Annotated[str | None, Field(description=QUAKE_HOST_FILTER_FIELDS_DESCRIPTION)] = None,
+        exclude: Annotated[str | None, Field(description=QUAKE_HOST_FILTER_FIELDS_DESCRIPTION)] = None,
+        ignore_cache: Annotated[bool, Field(description="Whether to ignore cached data.")] = False,
+        start_time: Annotated[str | None, Field(description="UTC start time, for example 2020-10-14 00:00:00.")] = None,
+        end_time: Annotated[str | None, Field(description="UTC end time, for example 2020-10-14 00:00:00.")] = None,
+        retry_mode: Annotated[str, Field(pattern="^(never|safe_only|aggressive)$", description="Retry policy. safe_only never repeats a request after write/read timeout; aggressive may consume quota twice.")] = "safe_only",
+        force_retry: Annotated[bool, Field(description="Repeat a recently indeterminate identical request despite possible duplicate quota use.")] = False,
+    ) -> StructuredToolResult:
+        return mcp_tool_result(await scroll_quake_host(
+            query=query,
+            size=size,
+            pagination_id=pagination_id,
+            rule=rule,
+            ip_list=ip_list,
+            include=include,
+            exclude=exclude,
+            ignore_cache=ignore_cache,
+            start_time=start_time,
+            end_time=end_time,
+            retry_mode=retry_mode,
+            force_retry=force_retry,
+        ))
+
+    @server.tool(
+        name="quake_host_aggregation_fields",
+        title="List Quake Host-Data Aggregation Fields",
+        description=(
+            "List fields accepted by quake_host_aggregation in aggregation_list. Use "
+            "quake_host_filterable_fields for host include/exclude fields instead. This "
+            "operation is read-only and is throttled to one call every 5 seconds."
+        ),
+        annotations=READ_ONLY_REMOTE_TOOL,
+    )
+    async def quake_host_aggregation_fields(    ) -> StructuredToolResult:
+        return mcp_tool_result(await get_quake_host_aggregation_fields())
+
+    @server.tool(
+        name="quake_host_aggregation",
+        title="Aggregate Quake Host-Data Search Matches",
+        description=(
+            "Aggregate Quake host-data matches into buckets for one or two fields, for "
+            "example org, country_cn, or province_of_china. Use quake_host_search when "
+            "individual host records are required, and quake_host_aggregation_fields to "
+            "discover valid bucket fields. This read-only request requires CN_QUAKE_KEY, "
+            "consumes quota, and is throttled to one call every 5 seconds. safe_only never "
+            "repeats a read/write timeout; force_retry accepts possible duplicate quota use."
+        ),
+        annotations=METERED_READ_ONLY_REMOTE_TOOL,
+    )
+    async def quake_host_aggregation(
+        query: Annotated[str, Field(description='Quake query, for example org:"Example Inc".')],
+        aggregation_list: Annotated[str, Field(description="One or two comma-separated host aggregation fields, for example org or org,country_cn.")],
+        size: Annotated[int, Field(ge=1, le=10000, description="Aggregation bucket count per field, up to 10000.")] = 5,
+        rule: Annotated[str | None, Field(description="Host-data collection rule name for IP-list collections.")] = None,
+        ip_list: Annotated[str | None, Field(description="Comma-separated IP list.")] = None,
+        ignore_cache: Annotated[bool, Field(description="Whether to ignore cached data.")] = False,
+        start_time: Annotated[str | None, Field(description="UTC start time, for example 2020-10-14 00:00:00.")] = None,
+        end_time: Annotated[str | None, Field(description="UTC end time, for example 2020-10-14 00:00:00.")] = None,
+        retry_mode: Annotated[str, Field(pattern="^(never|safe_only|aggressive)$", description="Retry policy. safe_only never repeats a request after write/read timeout; aggressive may consume quota twice.")] = "safe_only",
+        force_retry: Annotated[bool, Field(description="Repeat a recently indeterminate identical request despite possible duplicate quota use.")] = False,
+    ) -> StructuredToolResult:
+        return mcp_tool_result(await aggregate_quake_host(
+            query=query,
+            aggregation_list=aggregation_list,
+            size=size,
+            rule=rule,
+            ip_list=ip_list,
+            ignore_cache=ignore_cache,
+            start_time=start_time,
+            end_time=end_time,
+            retry_mode=retry_mode,
+            force_retry=force_retry,
+        ))
+
+    @server.tool(
+        name="quake_similar_icon",
+        title="Aggregate Quake Assets by Similar Favicon",
+        description=(
+            "Find favicon hashes similar to a known MD5 favicon_hash, bucketed by the "
+            "provider's similarity model (similar 0-1, higher is stricter). Use this to "
+            "expand the icon correlation pivot when assets share a favicon, then query the "
+            "returned hashes back with favicon: in quake_service_search or quake_host_search. "
+            "This read-only request requires CN_QUAKE_KEY, consumes Quake quota, and is "
+            "throttled to one call every 5 seconds. safe_only never repeats a read/write "
+            "timeout; force_retry accepts possible duplicate quota use."
+        ),
+        annotations=METERED_READ_ONLY_REMOTE_TOOL,
+    )
+    async def quake_similar_icon(
+        favicon_hash: Annotated[str, Field(pattern="^[0-9a-fA-F]{32}$", description="MD5 favicon hash, for example 827fd6c561d4b1f932f75e0f9a17f766.")],
+        similar: Annotated[float, Field(ge=0.0, le=1.0, description="Similarity threshold between 0 and 1; higher values return closer matches.")] = 0.9,
+        size: Annotated[int, Field(ge=1, le=50, description="Number of similar hashes to return, up to 50.")] = 10,
+        ignore_cache: Annotated[bool, Field(description="Whether to ignore cached data.")] = False,
+        start_time: Annotated[str | None, Field(description="UTC start time, for example 2020-10-14 00:00:00.")] = None,
+        end_time: Annotated[str | None, Field(description="UTC end time, for example 2020-10-14 00:00:00.")] = None,
+        retry_mode: Annotated[str, Field(pattern="^(never|safe_only|aggressive)$", description="Retry policy. safe_only never repeats a request after write/read timeout; aggressive may consume quota twice.")] = "safe_only",
+        force_retry: Annotated[bool, Field(description="Repeat a recently indeterminate identical request despite possible duplicate quota use.")] = False,
+    ) -> StructuredToolResult:
+        return mcp_tool_result(await aggregate_quake_similar_icon(
+            favicon_hash=favicon_hash,
+            similar=similar,
+            size=size,
+            ignore_cache=ignore_cache,
             start_time=start_time,
             end_time=end_time,
             retry_mode=retry_mode,

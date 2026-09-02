@@ -117,7 +117,7 @@ class HunterEditionRoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("CN_HUNTER_ENTERPRISE_KEY", server.instructions)
         self.assertNotIn("secret-value-must-not-leak", server.instructions)
         tool_names = {tool.name for tool in tools}
-        self.assertEqual(len(tools), 21)
+        self.assertEqual(len(tools), 27)
         self.assertIn("hunter_enterprise_search", tool_names)
         self.assertNotIn("hunter_personal_search", tool_names)
 
@@ -168,6 +168,21 @@ class QuakeFieldTests(unittest.TestCase):
         )
         self.assertEqual(warnings[0]["details"]["official_source"], "/api/v3/filterable/field/quake_service")
 
+    def test_host_fields_are_validated_against_the_host_source(self) -> None:
+        include, exclude, warnings = quake._prepare_host_fields(
+            "ip,org,hostname,location.country_cn,service,title",
+            "location.gps,protocol",
+        )
+
+        self.assertEqual(include, "ip,org,hostname,location.country_cn")
+        self.assertEqual(exclude, "location.gps")
+        self.assertEqual(len(warnings), 2)
+        self.assertEqual(
+            warnings[0]["details"]["removed_fields"],
+            ["service", "title"],
+        )
+        self.assertEqual(warnings[0]["details"]["official_source"], "/api/v3/filterable/field/quake_host")
+
 
 class QuakeSearchTests(unittest.IsolatedAsyncioTestCase):
     async def test_search_filters_fields_and_uses_safe_only_retry(self) -> None:
@@ -202,6 +217,56 @@ class QuakeSearchTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(warnings[0]["type"], "retry_may_consume_quota")
         self.assertEqual(warnings[0]["details"]["attempts"], 2)
+
+    async def test_host_search_sends_no_latest_field_and_filters_host_fields(self) -> None:
+        provider_result = {
+            "ok": True,
+            "platform": "Quake",
+            "data": {"data": []},
+            "meta": {"attempts": 1},
+        }
+
+        with (
+            patch.object(quake, "_quake_key", return_value="configured"),
+            patch.object(quake, "request_json", new=AsyncMock(return_value=provider_result)) as request,
+        ):
+            result = await quake.search_quake_host(
+                query='org:"Example Inc"',
+                include="ip,location.owner,service",
+            )
+
+        request_kwargs = request.await_args.kwargs
+        self.assertEqual(request_kwargs["url"], "https://quake.360.net/api/v3/search/quake_host")
+        self.assertEqual(request_kwargs["json"]["include"], ["ip", "location.owner"])
+        self.assertNotIn("latest", request_kwargs["json"])
+        self.assertEqual(request_kwargs["json"]["query"], 'org:"Example Inc"')
+        self.assertEqual(result["meta"]["executed_query"], 'org:"Example Inc"')
+        self.assertEqual(result["warnings"][0]["details"]["removed_fields"], ["service"])
+
+    async def test_similar_icon_sends_md5_threshold_and_size(self) -> None:
+        provider_result = {
+            "ok": True,
+            "platform": "Quake",
+            "data": {"data": []},
+            "meta": {"attempts": 1},
+        }
+
+        with (
+            patch.object(quake, "_quake_key", return_value="configured"),
+            patch.object(quake, "request_json", new=AsyncMock(return_value=provider_result)) as request,
+        ):
+            result = await quake.aggregate_quake_similar_icon(
+                favicon_hash="827fd6c561d4b1f932f75e0f9a17f766",
+                similar=0.95,
+                size=5,
+            )
+
+        request_kwargs = request.await_args.kwargs
+        self.assertEqual(request_kwargs["url"], "https://quake.360.net/api/v3/query/similar_icon/aggregation")
+        self.assertEqual(request_kwargs["json"]["favicon_hash"], "827fd6c561d4b1f932f75e0f9a17f766")
+        self.assertEqual(request_kwargs["json"]["similar"], 0.95)
+        self.assertEqual(request_kwargs["json"]["size"], 5)
+        self.assertEqual(result["meta"]["favicon_hash"], "827fd6c561d4b1f932f75e0f9a17f766")
 
 
 class FofaCompletenessTests(unittest.IsolatedAsyncioTestCase):

@@ -2,9 +2,9 @@
 
 来源：`https://quake.360.net/quake/#/help?id=5e77423bcb9954d2f8a01656&title=%E4%BD%BF%E7%94%A8%E8%AF%B4%E6%98%8E`
 
-抓取时间：2026-05-14
+抓取时间：2026-09-02
 
-文档范围：`API接口 / 使用说明` 至 `服务数据接口`
+文档范围：`API接口 / 使用说明` 至 `主机数据接口`、`favicon 相似度查询接口`（新增主机数据 API 族与相似图标聚合）
 
 ## 基础信息
 
@@ -98,6 +98,12 @@ print(response.json())
 | 服务数据深度查询 | POST | `/api/v3/scroll/quake_service` |
 | 获取聚合数据筛选字段 | GET | `/api/v3/aggregation/quake_service` |
 | 服务聚合数据查询 | POST | `/api/v3/aggregation/quake_service` |
+| 获取主机数据筛选字段 | GET | `/api/v3/filterable/field/quake_host` |
+| 主机数据实时查询 | POST | `/api/v3/search/quake_host` |
+| 主机数据深度查询 | POST | `/api/v3/scroll/quake_host` |
+| 获取主机聚合数据筛选字段 | GET | `/api/v3/aggregation/quake_host` |
+| 主机聚合数据查询 | POST | `/api/v3/aggregation/quake_host` |
+| 相似图标聚合查询 | POST | `/api/v3/query/similar_icon/aggregation` |
 
 ## 用户信息
 
@@ -618,4 +624,221 @@ print(response.json())
   },
   "meta": {}
 }
+```
+
+## 主机数据接口
+
+> 2026-09-02 补充：官方于服务数据接口之外新增了独立的主机数据 API 族，接口形状与
+> 服务数据接口一致，返回以主机（IP）为单位的聚合信息（location、org、asn、hostname 等），
+> 适合组织暴露面梳理；`include`/`exclude` 的可传字段来自主机筛选字段接口，与服务数据字段集不同。
+
+### 获取主机数据筛选字段
+
+```http
+GET /api/v3/filterable/field/quake_host
+```
+
+用途：获取主机数据接口中可用于 `include`、`exclude` 的字段列表。
+
+### 可筛选字段示例
+
+```text
+location.owner
+location.street_cn
+location.country_cn
+org
+hostname
+ip
+time
+location.gps
+location.province_en
+location.province_cn
+location.street_en
+location.city_cn
+location.country_en
+asn
+location.city_en
+```
+
+### 主机数据实时查询
+
+```http
+POST /api/v3/search/quake_host
+```
+
+用途：小批量主机数据查询，每个结果为一条主机聚合数据。存在深度翻页（如一次性查询 10W 数据）需求时使用深度查询接口。
+
+### 参数
+
+| 参数 | 必填 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| `query` | 是 | string | `*` | 查询语句 |
+| `rule` | 否 | string | 无 | 类型为 IP 列表的主机数据收藏名称 |
+| `ip_list` | 否 | List[string] | 无 | IP 列表 |
+| `start` | 否 | int | `0` | 返回结果的下标切片位置 |
+| `size` | 否 | int | `10` | 返回结果的切片长度 |
+| `ignore_cache` | 否 | bool | `false` | 是否忽略缓存 |
+| `start_time` | 否 | string | 无 | 查询起始时间，格式 `2020-10-14 00:00:00`，时区 UTC |
+| `end_time` | 否 | string | 无 | 查询截止时间，格式 `2020-10-14 00:00:00`，时区 UTC |
+| `include` | 否 | List[string] | 无 | 包含字段 |
+| `exclude` | 否 | List[string] | 无 | 排除字段 |
+
+说明：仅付费用户能指定查询时间；`include`/`exclude` 的可传字段来自 `GET /api/v3/filterable/field/quake_host`。
+
+### 示例
+
+```bash
+curl -X POST "https://quake.360.net/api/v3/search/quake_host" \
+  -H "X-QuakeToken: {API Key}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "service: http",
+    "start": 20,
+    "size": 10,
+    "ignore_cache": false,
+    "start_time": "2024-01-01 00:00:00",
+    "end_time": "2024-02-01 00:00:00"
+  }'
+```
+
+### 主机数据深度查询
+
+```http
+POST /api/v3/scroll/quake_host
+```
+
+用途：通过 `pagination_id` 获取更多分页数据，适用于深度翻页。分页 ID 过期时间为 5 分钟。
+
+### 参数
+
+| 参数 | 必填 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| `pagination_id` | 否 | string | 无 | 分页 ID；首次请求不传，后续请求传上一页返回的 ID |
+| `query` | 是 | string | `*` | 查询语句 |
+| `rule` | 否 | string | 无 | 类型为 IP 列表的主机数据收藏名称 |
+| `ip_list` | 否 | List[string] | 无 | IP 列表 |
+| `size` | 否 | int | `10` | 单次分页大小 |
+| `ignore_cache` | 否 | bool | `false` | 是否忽略缓存 |
+| `start_time` | 否 | string | 无 | 查询起始时间，格式 `2020-10-14 00:00:00`，时区 UTC |
+| `end_time` | 否 | string | 无 | 查询截止时间，格式 `2020-10-14 00:00:00`，时区 UTC |
+| `include` | 否 | List[string] | 无 | 包含字段 |
+| `exclude` | 否 | List[string] | 无 | 排除字段 |
+
+### 响应示例
+
+```json
+{
+  "code": 0,
+  "message": "Successful.",
+  "data": [
+    {
+      "ip": "1.1.1.1",
+      "location": {"country_cn": "中国"},
+      "org": "APNIC Research"
+    }
+  ],
+  "meta": {
+    "total": 11547482,
+    "pagination_id": "66c594ed89004a19c1955a8c"
+  }
+}
+```
+
+### 获取主机聚合数据筛选字段
+
+```http
+GET /api/v3/aggregation/quake_host
+```
+
+用途：获取主机聚合查询可用的聚合字段。
+
+### 可聚合字段示例
+
+```text
+ip
+port
+service
+product
+os
+asn
+org
+isp
+province
+province_cn
+country
+country_cn
+country_code
+city
+city_cn
+district
+district_cn
+province_of_china
+```
+
+### 主机聚合数据查询
+
+```http
+POST /api/v3/aggregation/quake_host
+```
+
+### 参数
+
+| 参数 | 必填 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| `query` | 是 | string | `*` | 查询语句 |
+| `rule` | 否 | string | 无 | 类型为 IP 列表的主机数据收藏名称 |
+| `ip_list` | 否 | List[string] | 无 | IP 列表 |
+| `size` | 否 | int | `5` | 每项聚合数据个数，最大 `10000` |
+| `ignore_cache` | 否 | bool | `false` | 是否忽略缓存 |
+| `aggregation_list` | 是 | List[string] | 无 | 聚合字段列表，最多支持两个字段 |
+| `start_time` | 否 | string | 无 | 查询起始时间，格式 `2020-10-14 00:00:00`，时区 UTC |
+| `end_time` | 否 | string | 无 | 查询截止时间，格式 `2020-10-14 00:00:00`，时区 UTC |
+
+### 示例
+
+```bash
+curl -X POST "https://quake.360.net/api/v3/aggregation/quake_host" \
+  -H "X-QuakeToken: {API Key}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "service: http",
+    "size": 5,
+    "ignore_cache": false,
+    "aggregation_list": ["org"]
+  }'
+```
+
+## 相似图标聚合接口
+
+```http
+POST /api/v3/query/similar_icon/aggregation
+```
+
+用途：基于 favicon 的 MD5 值与相似度阈值，聚合返回与之相似的 favicon hash，可配合服务/主机查询中的 `favicon:` 语法做图标维度资产拓线。
+
+### 参数
+
+| 参数 | 必填 | 类型 | 默认值 | 说明 |
+| --- | --- | --- | --- | --- |
+| `favicon_hash` | 是 | string | 无 | favicon 的 MD5 值 |
+| `similar` | 是 | float | `0.9` | 相似度，范围 `0-1` |
+| `size` | 否 | int | `10` | 返回数量，最多支持 50 条 |
+| `ignore_cache` | 否 | bool | `false` | 是否忽略缓存 |
+| `start_time` | 否 | string | 无 | 查询起始时间，格式 `2020-10-14 00:00:00`，时区 UTC |
+| `end_time` | 否 | string | 无 | 查询截止时间，格式 `2020-10-14 00:00:00`，时区 UTC |
+
+### 示例
+
+```bash
+curl -X POST "https://quake.360.net/api/v3/query/similar_icon/aggregation" \
+  -H "X-QuakeToken: {API Key}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "favicon_hash": "827fd6c561d4b1f932f75e0f9a17f766",
+    "similar": 0.9,
+    "size": 10,
+    "ignore_cache": false,
+    "start_time": "2024-01-01 00:00:00",
+    "end_time": "2024-02-01 00:00:00"
+  }'
 ```

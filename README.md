@@ -15,7 +15,7 @@
 | 平台 | 能力 |
 | --- | --- |
 | FOFA | 资产搜索、连续翻页、统计聚合、Host 聚合、账号信息 |
-| 360 Quake | 服务搜索、深度翻页、服务聚合、筛选字段、聚合字段、账号信息 |
+| 360 Quake | 服务/主机数据搜索、深度翻页、聚合、筛选字段、相似 favicon 查询、账号信息 |
 | Hunter | 资产搜索、批量任务、任务状态、结果下载、结果拉取、账号信息 |
 | ZoomEye | 资产搜索、账号信息 |
 | DayDayMap | 资产搜索 |
@@ -236,6 +236,12 @@ API Key 获取入口：
 | `quake_search` | Quake | 兼容别名，参数与 `quake_service_scroll` 完全一致 |
 | `quake_aggregation_fields` | Quake | 聚合字段列表 |
 | `quake_service_aggregation` | Quake | 服务聚合查询 |
+| `quake_host_filterable_fields` | Quake | 主机数据可筛选字段 |
+| `quake_host_search` | Quake | 主机数据实时搜索 |
+| `quake_host_scroll` | Quake | 主机数据深度翻页 |
+| `quake_host_aggregation_fields` | Quake | 主机聚合字段列表 |
+| `quake_host_aggregation` | Quake | 主机聚合查询 |
+| `quake_similar_icon` | Quake | 相似 favicon 聚合查询 |
 | `zoomeye_user_info` | ZoomEye | 用户信息、订阅信息和积分情况 |
 | `zoomeye_search` | ZoomEye | 付费账号 v2 资产搜索 |
 | `hunter_personal_search` | Hunter 个人版 | 资产搜索 |
