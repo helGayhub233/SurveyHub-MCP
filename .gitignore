@@ -10,7 +10,6 @@ dist/
 wheels/
 
 # Test / coverage / lint caches
-tests/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
@@ -43,12 +42,7 @@ mcp.json
 Thumbs.db
 
 # Local tool state
-.playwright-mcp/
-.code-review-graph/
 graphify-out/
-.agents/
-.codex/
-.workbuddy/
 
 # Local audit artifacts
 docs/audit-report.md
