@@ -5,7 +5,7 @@
 <p align="center">
   <img src="https://badgen.net/pypi/v/surveyhub-mcp?label=PyPI&color=3775A9&cache=300&version=1.19.0" alt="PyPI v1.19.0"/>
   <img src="https://badgen.net/badge/Python/%3E%3D3.10/3776AB" alt="Python >=3.10"/>
-  <img src="https://badgen.net/badge/MCP%20SDK/2.0.0/6F42C1" alt="MCP SDK 2.0.0"/>
+  <img src="https://badgen.net/badge/MCP%20SDK/2.1.1/6F42C1" alt="MCP SDK 2.1.1"/>
   <img src="https://badgen.net/pypi/dm/surveyhub-mcp?label=Downloads&color=2EA44F&cache=86400" alt="PyPI 下载量"/>
   <img src="https://badgen.net/github/license/helGayhub233/SurveyHub-MCP?label=License&color=blue" alt="许可证"/>
 </p>
@@ -24,7 +24,7 @@
 
 ### 通过 pip 安装
 
-要求 Python `>=3.10`，MCP Python SDK `>=2.0.0,<3`。用户无需 clone 源码，可直接从 PyPI 安装：
+要求 Python `>=3.10`，MCP Python SDK `>=2.0.0,<3`（当前锁定并验证 `2.1.1`）。用户无需 clone 源码，可直接从 PyPI 安装：
 
 ```bash
 python -m pip install -U surveyhub-mcp
@@ -233,7 +233,7 @@ API Key 获取入口：
 | `quake_filterable_fields` | Quake | 服务数据可筛选字段 |
 | `quake_service_search` | Quake | 实时服务搜索 |
 | `quake_service_scroll` | Quake | 深度翻页搜索 |
-| `quake_search` | Quake | 兼容别名，等同于 `quake_service_scroll` |
+| `quake_search` | Quake | 兼容别名，参数与 `quake_service_scroll` 完全一致 |
 | `quake_aggregation_fields` | Quake | 聚合字段列表 |
 | `quake_service_aggregation` | Quake | 服务聚合查询 |
 | `zoomeye_user_info` | ZoomEye | 用户信息、订阅信息和积分情况 |
@@ -251,7 +251,7 @@ API Key 获取入口：
 | `hunter_enterprise_user_info` | Hunter 企业版 | 账号信息 |
 | `daydaymap_search` | DayDayMap | 资产搜索 |
 
-工具返回结构化结果：成功时包含 `ok=true`、`platform` 和 `data` 或 `text`；失败时包含 `ok=false`、`platform` 和 `error`。`meta.execution` 还会返回 `request_id`、脱敏请求指纹、传输状态、重试安全性、配额风险与数据完整性，便于 AI 区分“确认空结果”与“执行结果未知”。
+工具返回结构化结果：成功时包含 `ok=true`、`platform` 和 `data` 或 `text`；失败时包含 `ok=false`、`platform` 和 `error`。MCP 协议层的 `is_error` 标志与 `ok` 字段保持一致——所有平台在 `ok=false` 时均设置 `is_error=true`，便于客户端可靠区分成功与失败。`meta.execution` 还会返回 `request_id`、脱敏请求指纹、传输状态、重试安全性、配额风险与数据完整性，便于 AI 区分"确认空结果"与"执行结果未知"。
 
 计费型资产搜索默认使用 `retry_mode=safe_only`：仅在请求确认未发送的连接或连接池失败时自动重试；写入或读取超时会返回 `final_state=indeterminate`，不会自动重发。相同指纹的请求在未知状态后 60 秒内会被请求账本抑制；只有明确接受重复扣费风险时才应设置 `force_retry=true`。
 
@@ -288,12 +288,12 @@ API Key 获取入口：
 | Quake | `quake_service_aggregation` | 本地校验聚合字段最多 2 个，参数 schema 限制 `size <= 10000` |
 | ZoomEye | `zoomeye_search` | 仅调用付费账号 `POST /v2/search`，参数 schema 限制 `pagesize <= 10000` |
 | Hunter 个人版 | 全部搜索工具 | 基于 API Key 的 SQLite 跨进程共享节流，`1 秒/次` |
-| Hunter 个人版 | 搜索和批量查询语句 | 默认将 `field="value"` 转为 `field=="value"` 精确查询；可用 `exact_search=false` 保留平台包含语义 |
+| Hunter 个人版 | 搜索和批量查询语句 | 默认将 `field="value"` 转为 `field=="value"` 精确查询，但文本搜索类字段（`domain`、`web.title`、`web.body`、`header`、`cert`、`cert.subject`、`protocol.banner`、`icp.web_name`、`icp.name`、`domain.cname`、`ip.tag`、`web.tag`、`web.similar`、`web.similar_id`、`after`、`before`）保留 `=` 包含语义；可用 `exact_search=false` 对所有字段保留平台包含语义 |
 | Hunter 个人版 | 批量任务 | 工具描述提示平台限制：`all <= 10`，`ip/domain/company <= 100` |
 | Hunter 企业版 | 全部搜索工具 | 基于 API Key 的 SQLite 跨进程共享节流，`1 秒/次` |
-| Hunter 企业版 | 搜索和批量查询语句 | 默认将 `field="value"` 转为 `field=="value"` 精确查询；可用 `exact_search=false` 保留平台包含语义 |
+| Hunter 企业版 | 搜索和批量查询语句 | 默认将 `field="value"` 转为 `field=="value"` 精确查询，但文本搜索类字段（`domain`、`web.title`、`web.body`、`header`、`cert`、`cert.subject`、`protocol.banner`、`icp.web_name`、`icp.name`、`domain.cname`、`ip.tag`、`web.tag`、`web.similar`、`web.similar_id`、`after`、`before`）保留 `=` 包含语义；可用 `exact_search=false` 对所有字段保留平台包含语义 |
 | Hunter 企业版 | 批量任务 | 工具描述提示平台限制：`all <= 10`，`ip/domain/company <= 10000` |
-| DayDayMap | `daydaymap_search` | 本地拒绝空白查询；限制 `page <= 10000`、`page_size <= 10000`、`page × page_size <= 10000` |
+| DayDayMap | `daydaymap_search` | 本地拒绝空白查询；限制 `page <= 10000`、`page_size <= 10000`、`page × page_size <= 10000`；应用层错误（HTTP 200 但 `code!=200`）时 `meta.execution.final_state` 重写为 `confirmed_failure` |
 | 全部平台 | 全部 HTTP 请求 | 进程内熔断保护，连续 3 次可恢复失败后暂停 15 秒 |
 
 搜索响应的顶层 `meta` 包含 MCP 实际执行信息，例如 `original_query`、`executed_query`、`attempts` 和 `partial_data`；顶层 `warnings` 保留不会使请求失败、但可能影响完整性的供应商或参数提示。
@@ -327,6 +327,8 @@ src/
     daydaymap.py          # DayDayMap 工具
     reference.py          # MCP resources 和 prompts
     common.py             # 共享编码、HTTP、错误处理和节流工具
+glama.json                # Glama 注册表维护者声明
+.github/workflows/        # CI 测试矩阵（Python 3.10–3.13）
 ```
 
 ## 手动编译

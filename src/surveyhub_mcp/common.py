@@ -641,7 +641,26 @@ def encode_base64_url(text: str) -> str:
     return base64.urlsafe_b64encode(text.encode("utf-8")).decode("ascii")
 
 
-HUNTER_EXACT_SEARCH_EXCLUDED_FIELDS = {"after", "before"}
+HUNTER_EXACT_SEARCH_EXCLUDED_FIELDS = {
+    # Date range fields always use single = per Hunter syntax.
+    "after", "before",
+    # Text-search fields where Hunter's = already means "contains".
+    # Converting these to == would silently shrink results to exact-only matches.
+    "web.title",        # "从网站标题中搜索"
+    "web.body",         # "搜索网站正文包含"
+    "domain",           # "搜索域名包含"
+    "header",           # "搜索 HTTP 响应头中含有"
+    "protocol.banner",  # "查询端口响应中包含"
+    "cert",             # "搜索证书中带有"
+    "cert.subject",     # "搜索证书使用者包含"
+    "icp.web_name",     # "搜索 ICP 备案网站名中含有"
+    "icp.name",         # "搜索 ICP 备案单位名中含有"
+    "domain.cname",     # "搜索 CNAME 包含"
+    "ip.tag",           # "查询包含 IP 标签"
+    "web.tag",          # "查询包含资产标签"
+    "web.similar",      # similarity search, not equality
+    "web.similar_id",   # similarity search, not equality
+}
 
 
 def normalize_hunter_query(query: str, *, exact_search: bool = True) -> str:

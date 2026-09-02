@@ -11,10 +11,12 @@ from . import __version__
 from .common import (
     METERED_READ_ONLY_REMOTE_TOOL,
     READ_ONLY_REMOTE_TOOL,
+    StructuredToolResult,
     SurveyHubMCPServer,
     encode_base64,
     enrich_payload,
     error_payload,
+    mcp_tool_result,
     missing_env_message,
     platform_key,
     request_json,
@@ -147,6 +149,10 @@ async def search_daydaymap(
     if code != 200:
         guidance = DAYDAYMAP_ERROR_CODES.get(code, f"未知错误 (code={code})")
         provider_message = data.get("msg")
+        meta = dict(result.get("meta") or {})
+        execution = dict(meta.get("execution") or {})
+        execution["final_state"] = "confirmed_failure"
+        meta["execution"] = execution
         return enrich_payload(
             error_payload(
                 platform="DayDayMap",
@@ -154,7 +160,7 @@ async def search_daydaymap(
                 error_type=DAYDAYMAP_ERROR_TYPES.get(code, "api_error"),
                 details={"code": code, "provider_message": provider_message, "guidance": guidance},
             ),
-            meta=result.get("meta"),
+            meta=meta,
         )
 
     return result
@@ -210,8 +216,8 @@ def register_daydaymap_tools(server: MCPServer) -> None:
         ] = None,
         retry_mode: Annotated[str, Field(pattern="^(never|safe_only|aggressive)$", description="Retry policy. safe_only retries only failures known to occur before sending; aggressive may consume quota twice.")] = "safe_only",
         force_retry: Annotated[bool, Field(description="Repeat a recently indeterminate identical request despite possible duplicate quota use.")] = False,
-    ) -> dict[str, Any]:
-        return await search_daydaymap(
+    ) -> StructuredToolResult:
+        return mcp_tool_result(await search_daydaymap(
             query=query,
             page=page,
             page_size=page_size,
@@ -219,7 +225,7 @@ def register_daydaymap_tools(server: MCPServer) -> None:
             exclude_fields=exclude_fields,
             retry_mode=retry_mode,
             force_retry=force_retry,
-        )
+        ))
 
 
 def create_server() -> SurveyHubMCPServer:

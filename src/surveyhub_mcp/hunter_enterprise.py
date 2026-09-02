@@ -186,6 +186,7 @@ async def create_hunter_enterprise_batch_task(
         )
 
     params: dict[str, str | int] = {**_auth_params()}
+    prepared_query: str | None = None
     if query:
         prepared_query = normalize_hunter_query(query, exact_search=exact_search)
         params["search"] = encode_base64_url(prepared_query)
@@ -210,7 +211,7 @@ async def create_hunter_enterprise_batch_task(
                 details={"path": str(path)},
             )
         with path.open("rb") as file_obj:
-            return await request_json(
+            result = await request_json(
                 platform="Hunter Enterprise",
                 method="POST",
                 url=f"{HUNTER_BASE_URL}/openApi/search/batch",
@@ -221,6 +222,7 @@ async def create_hunter_enterprise_batch_task(
                 auth_hint="Authentication failed. Check CN_HUNTER_ENTERPRISE_KEY or CN_HUNTER_KEY.",
                 forbidden_hint="Access forbidden. Your Hunter enterprise account may not have sufficient permissions or credits.",
             )
+            return enrich_payload(result, meta={"original_query": query, "executed_query": prepared_query})
 
     result = await request_json(
         platform="Hunter Enterprise",

@@ -48,6 +48,10 @@ Thumbs.db
 graphify-out/
 .agents/
 .codex/
+.workbuddy/
+
+# Local audit artifacts
+docs/audit-report.md
 
 # Logs / temp
 *.log

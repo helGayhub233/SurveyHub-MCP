@@ -11,9 +11,11 @@ from . import __version__
 from .common import (
     METERED_READ_ONLY_REMOTE_TOOL,
     READ_ONLY_REMOTE_TOOL,
+    StructuredToolResult,
     SurveyHubMCPServer,
     encode_base64,
     error_payload,
+    mcp_tool_result,
     missing_env_message,
     platform_key,
     request_json,
@@ -127,8 +129,8 @@ def register_zoomeye_tools(server: MCPServer) -> None:
         ),
         annotations=READ_ONLY_REMOTE_TOOL,
     )
-    async def zoomeye_user_info() -> dict[str, Any]:
-        return await get_zoomeye_user_info()
+    async def zoomeye_user_info(    ) -> StructuredToolResult:
+        return mcp_tool_result(await get_zoomeye_user_info())
 
     @server.tool(
         name="zoomeye_search",
@@ -175,8 +177,8 @@ def register_zoomeye_tools(server: MCPServer) -> None:
         ] = False,
         retry_mode: Annotated[str, Field(pattern="^(never|safe_only|aggressive)$", description="Retry policy. safe_only retries only failures known to occur before sending; aggressive may consume points twice.")] = "safe_only",
         force_retry: Annotated[bool, Field(description="Repeat a recently indeterminate identical request despite possible duplicate point use.")] = False,
-    ) -> dict[str, Any]:
-        return await search_zoomeye_assets(
+    ) -> StructuredToolResult:
+        return mcp_tool_result(await search_zoomeye_assets(
             query=query,
             qbase64=qbase64,
             page=page,
@@ -187,7 +189,7 @@ def register_zoomeye_tools(server: MCPServer) -> None:
             ignore_cache=ignore_cache,
             retry_mode=retry_mode,
             force_retry=force_retry,
-        )
+        ))
 
 
 def create_server() -> SurveyHubMCPServer:

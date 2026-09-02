@@ -13,10 +13,12 @@ from .common import (
     METERED_READ_ONLY_REMOTE_TOOL,
     READ_ONLY_REMOTE_TOOL,
     AsyncRateLimiter,
+    StructuredToolResult,
     SurveyHubMCPServer,
     encode_base64,
     enrich_payload,
     error_payload,
+    mcp_tool_result,
     missing_env_message,
     platform_key,
     request_json,
@@ -297,8 +299,8 @@ def register_fofa_tools(server: MCPServer) -> None:
         r_type: Annotated[str, Field(description='Response type. Use "json" for JSON responses.')] = "json",
         retry_mode: Annotated[str, Field(pattern="^(never|safe_only|aggressive)$", description="Retry policy. safe_only retries only failures known to occur before sending the request; aggressive may duplicate quota use.")] = "safe_only",
         force_retry: Annotated[bool, Field(description="Repeat a recently indeterminate identical request despite possible duplicate quota use.")] = False,
-    ) -> dict[str, Any]:
-        return await search_fofa(
+    ) -> StructuredToolResult:
+        return mcp_tool_result(await search_fofa(
             query=query,
             size=size,
             page=page,
@@ -307,7 +309,7 @@ def register_fofa_tools(server: MCPServer) -> None:
             r_type=r_type,
             retry_mode=retry_mode,
             force_retry=force_retry,
-        )
+        ))
 
     @server.tool(
         name="fofa_search_next",
@@ -331,8 +333,8 @@ def register_fofa_tools(server: MCPServer) -> None:
         r_type: Annotated[str, Field(description='Response type. Use "json" for JSON responses.')] = "json",
         retry_mode: Annotated[str, Field(pattern="^(never|safe_only|aggressive)$", description="Retry policy. safe_only retries only failures known to occur before sending the request; aggressive may duplicate quota use.")] = "safe_only",
         force_retry: Annotated[bool, Field(description="Repeat a recently indeterminate identical request despite possible duplicate quota use.")] = False,
-    ) -> dict[str, Any]:
-        return await search_fofa_next(
+    ) -> StructuredToolResult:
+        return mcp_tool_result(await search_fofa_next(
             query=query,
             size=size,
             next_id=next_id,
@@ -341,7 +343,7 @@ def register_fofa_tools(server: MCPServer) -> None:
             r_type=r_type,
             retry_mode=retry_mode,
             force_retry=force_retry,
-        )
+        ))
 
     @server.tool(
         name="fofa_search_stats",
@@ -360,8 +362,8 @@ def register_fofa_tools(server: MCPServer) -> None:
             str,
             Field(description="Comma-separated aggregation fields, for example protocol,domain,port."),
         ] = "protocol,domain,port",
-    ) -> dict[str, Any]:
-        return await search_fofa_stats(query=query, fields=fields)
+    ) -> StructuredToolResult:
+        return mcp_tool_result(await search_fofa_stats(query=query, fields=fields))
 
     @server.tool(
         name="fofa_host",
@@ -376,8 +378,8 @@ def register_fofa_tools(server: MCPServer) -> None:
     async def fofa_host(
         host: Annotated[str, Field(description="Host name or IP address, usually an IP.")],
         detail: Annotated[bool, Field(description="Set true to include port product details.")] = False,
-    ) -> dict[str, Any]:
-        return await get_fofa_host(host=host, detail=detail)
+    ) -> StructuredToolResult:
+        return mcp_tool_result(await get_fofa_host(host=host, detail=detail))
 
     @server.tool(
         name="fofa_user_info",
@@ -391,8 +393,8 @@ def register_fofa_tools(server: MCPServer) -> None:
         ),
         annotations=READ_ONLY_REMOTE_TOOL,
     )
-    async def fofa_user_info() -> dict[str, Any]:
-        return await get_fofa_user_info()
+    async def fofa_user_info(    ) -> StructuredToolResult:
+        return mcp_tool_result(await get_fofa_user_info())
 
 
 def create_server() -> SurveyHubMCPServer:

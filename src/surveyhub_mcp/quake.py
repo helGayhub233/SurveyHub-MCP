@@ -13,9 +13,11 @@ from .common import (
     METERED_READ_ONLY_REMOTE_TOOL,
     READ_ONLY_REMOTE_TOOL,
     AsyncRateLimiter,
+    StructuredToolResult,
     SurveyHubMCPServer,
     enrich_payload,
     error_payload,
+    mcp_tool_result,
     missing_env_message,
     platform_key,
     request_json,
@@ -405,8 +407,8 @@ def register_quake_tools(server: MCPServer) -> None:
         ),
         annotations=READ_ONLY_REMOTE_TOOL,
     )
-    async def quake_user_info() -> dict[str, Any]:
-        return await get_quake_user_info()
+    async def quake_user_info(    ) -> StructuredToolResult:
+        return mcp_tool_result(await get_quake_user_info())
 
     @server.tool(
         name="quake_filterable_fields",
@@ -419,8 +421,8 @@ def register_quake_tools(server: MCPServer) -> None:
         ),
         annotations=READ_ONLY_REMOTE_TOOL,
     )
-    async def quake_filterable_fields() -> dict[str, Any]:
-        return await get_quake_filterable_fields()
+    async def quake_filterable_fields(    ) -> StructuredToolResult:
+        return mcp_tool_result(await get_quake_filterable_fields())
 
     @server.tool(
         name="quake_service_search",
@@ -449,8 +451,8 @@ def register_quake_tools(server: MCPServer) -> None:
         end_time: Annotated[str | None, Field(description="UTC end time, for example 2020-10-14 00:00:00.")] = None,
         retry_mode: Annotated[str, Field(pattern="^(never|safe_only|aggressive)$", description="Retry policy. safe_only never repeats a request after write/read timeout; aggressive may consume quota twice.")] = "safe_only",
         force_retry: Annotated[bool, Field(description="Repeat a recently indeterminate identical request despite possible duplicate quota use.")] = False,
-    ) -> dict[str, Any]:
-        return await search_quake_service(
+    ) -> StructuredToolResult:
+        return mcp_tool_result(await search_quake_service(
             query=query,
             start=start,
             size=size,
@@ -465,7 +467,7 @@ def register_quake_tools(server: MCPServer) -> None:
             end_time=end_time,
             retry_mode=retry_mode,
             force_retry=force_retry,
-        )
+        ))
 
     @server.tool(
         name="quake_service_scroll",
@@ -495,8 +497,8 @@ def register_quake_tools(server: MCPServer) -> None:
         end_time: Annotated[str | None, Field(description="UTC end time, for example 2020-10-14 00:00:00.")] = None,
         retry_mode: Annotated[str, Field(pattern="^(never|safe_only|aggressive)$", description="Retry policy. safe_only never repeats a request after write/read timeout; aggressive may consume quota twice.")] = "safe_only",
         force_retry: Annotated[bool, Field(description="Repeat a recently indeterminate identical request despite possible duplicate quota use.")] = False,
-    ) -> dict[str, Any]:
-        return await scroll_quake_service(
+    ) -> StructuredToolResult:
+        return mcp_tool_result(await scroll_quake_service(
             query=query,
             size=size,
             pagination_id=pagination_id,
@@ -511,7 +513,7 @@ def register_quake_tools(server: MCPServer) -> None:
             end_time=end_time,
             retry_mode=retry_mode,
             force_retry=force_retry,
-        )
+        ))
 
     @server.tool(
         name="quake_search",
@@ -530,28 +532,34 @@ def register_quake_tools(server: MCPServer) -> None:
         query: Annotated[str, Field(description='Quake query, for example service:http or port:443 AND country:"China".')],
         size: Annotated[int, Field(ge=1, le=500, description="Results per page.")] = 100,
         pagination_id: Annotated[str | None, Field(description="Pagination ID from previous response.")] = None,
+        rule: Annotated[str | None, Field(description="Service data collection rule name for IP-list collections.")] = None,
+        ip_list: Annotated[str | None, Field(description="Comma-separated IP list.")] = None,
         include: Annotated[str | None, Field(description=QUAKE_FILTER_FIELDS_DESCRIPTION)] = None,
         exclude: Annotated[str | None, Field(description=QUAKE_FILTER_FIELDS_DESCRIPTION)] = None,
+        shortcuts: Annotated[str | None, Field(description="Comma-separated shortcut filter IDs from the web UI.")] = None,
         ignore_cache: Annotated[bool, Field(description="Whether to ignore cached data.")] = False,
         latest: Annotated[bool, Field(description="Whether to use latest data.")] = True,
         start_time: Annotated[str | None, Field(description="UTC start time.")] = None,
         end_time: Annotated[str | None, Field(description="UTC end time.")] = None,
         retry_mode: Annotated[str, Field(pattern="^(never|safe_only|aggressive)$", description="Retry policy. safe_only never repeats a request after write/read timeout; aggressive may consume quota twice.")] = "safe_only",
         force_retry: Annotated[bool, Field(description="Repeat a recently indeterminate identical request despite possible duplicate quota use.")] = False,
-    ) -> dict[str, Any]:
-        return await scroll_quake_service(
+    ) -> StructuredToolResult:
+        return mcp_tool_result(await scroll_quake_service(
             query=query,
             size=size,
             pagination_id=pagination_id,
+            rule=rule,
+            ip_list=ip_list,
             include=include,
             exclude=exclude,
+            shortcuts=shortcuts,
             ignore_cache=ignore_cache,
             latest=latest,
             start_time=start_time,
             end_time=end_time,
             retry_mode=retry_mode,
             force_retry=force_retry,
-        )
+        ))
 
     @server.tool(
         name="quake_aggregation_fields",
@@ -563,8 +571,8 @@ def register_quake_tools(server: MCPServer) -> None:
         ),
         annotations=READ_ONLY_REMOTE_TOOL,
     )
-    async def quake_aggregation_fields() -> dict[str, Any]:
-        return await get_quake_aggregation_fields()
+    async def quake_aggregation_fields(    ) -> StructuredToolResult:
+        return mcp_tool_result(await get_quake_aggregation_fields())
 
     @server.tool(
         name="quake_service_aggregation",
@@ -591,8 +599,8 @@ def register_quake_tools(server: MCPServer) -> None:
         end_time: Annotated[str | None, Field(description="UTC end time, for example 2020-10-14 00:00:00.")] = None,
         retry_mode: Annotated[str, Field(pattern="^(never|safe_only|aggressive)$", description="Retry policy. safe_only never repeats a request after write/read timeout; aggressive may consume quota twice.")] = "safe_only",
         force_retry: Annotated[bool, Field(description="Repeat a recently indeterminate identical request despite possible duplicate quota use.")] = False,
-    ) -> dict[str, Any]:
-        return await aggregate_quake_service(
+    ) -> StructuredToolResult:
+        return mcp_tool_result(await aggregate_quake_service(
             query=query,
             aggregation_list=aggregation_list,
             size=size,
@@ -604,7 +612,7 @@ def register_quake_tools(server: MCPServer) -> None:
             end_time=end_time,
             retry_mode=retry_mode,
             force_retry=force_retry,
-        )
+        ))
 
 
 def create_server() -> SurveyHubMCPServer:

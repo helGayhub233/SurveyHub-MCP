@@ -4,6 +4,14 @@ All notable changes to SurveyHub-MCP will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Upgraded the pinned MCP Python SDK from 2.0.0 to 2.1.1 in uv.lock.
+
+### Added
+
+- Added glama.json maintainer declaration and the GitHub Actions test matrix workflow (Python 3.10-3.13).
+
 ## [1.19.0] - 2026-08-03
 
 ### Added
