@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from . import __version__
-from .common import SurveyHubMCPServer
+from .common import SurveyHubMCPServer, canonical_env_name, platform_key
 from .daydaymap import register_daydaymap_tools
 from .fofa import register_fofa_tools
 from .hunter_enterprise import hunter_enterprise_key_source, register_hunter_enterprise_tools
@@ -18,6 +18,56 @@ SERVER_INSTRUCTIONS = (
     "Use the platform- and account-specific tool that matches the user's target data source. "
     "Never collapse Hunter Personal and Hunter Enterprise into a generic Hunter availability result."
 )
+
+_ASSET_PIVOT_INSTRUCTIONS = (
+    "Multi-source discovery workflow. When the user asks to map an organization's "
+    "or target's assets without naming a tool: (1) identify the configured platforms "
+    "from the runtime configuration below; (2) before the first metered search on each "
+    "platform whose quota is unknown, call its user_info tool to verify remaining quota "
+    "(DayDayMap exposes no user_info tool; insufficient credits there surface as provider "
+    "error code 2004); (3) search every configured platform with adequate quota - never a "
+    "single one - and expand the seed along the correlation chain domain -> IP -> ICP -> "
+    "icon hash -> TLS certificate fingerprint: derive sibling values from returned assets "
+    "(domains, IPs, ICP numbers, icon hashes, certificate subjects or fingerprints) and "
+    "query each derived value back on the other platforms using each platform's own query "
+    "syntax described in its search tool; (4) merge and de-duplicate assets across sources, "
+    "preferring narrow chained queries over broad ones, and never report a platform as "
+    "unavailable when its key is merely not configured - expose its setup guidance instead."
+)
+
+
+def platform_runtime_guidance() -> str:
+    """Describe which platform credentials are configured without disclosing values."""
+
+    def key_source(*var_names: str) -> str | None:
+        for name in var_names:
+            if platform_key(name):
+                return canonical_env_name(name)
+        return None
+
+    fofa = key_source("FOFA_KEY")
+    quake = key_source("QUAKE_KEY")
+    zoomeye = key_source("ZOOMEYE_API_KEY")
+    daydaymap = key_source("DAYDAYMAP_API_KEY")
+    hunter_personal = hunter_personal_key_source()
+    hunter_enterprise = hunter_enterprise_key_source()
+
+    def status(label: str, source: str | None, *, probe: str | None = None) -> str:
+        if source:
+            suffix = f" (probe quota via {probe}) " if probe else " "
+            return f"{label}: configured in {source}{suffix}"
+        return f"{label}: not configured"
+
+    return "Runtime platform configuration: " + " | ".join(
+        [
+            status("FOFA", fofa, probe="fofa_user_info"),
+            status("Quake", quake, probe="quake_user_info"),
+            status("Hunter Personal", hunter_personal, probe="hunter_personal_user_info"),
+            status("Hunter Enterprise", hunter_enterprise, probe="hunter_enterprise_user_info"),
+            status("ZoomEye", zoomeye, probe="zoomeye_user_info"),
+            status("DayDayMap", daydaymap),
+        ]
+    )
 
 
 def hunter_runtime_guidance() -> str:
@@ -58,7 +108,10 @@ def create_server() -> SurveyHubMCPServer:
         "surveyhub-mcp",
         title="SurveyHub MCP",
         description="Cyberspace asset search across FOFA, Quake, Hunter, ZoomEye, and DayDayMap.",
-        instructions=f"{SERVER_INSTRUCTIONS} {hunter_runtime_guidance()}",
+        instructions=(
+            f"{SERVER_INSTRUCTIONS} {_ASSET_PIVOT_INSTRUCTIONS} "
+            f"{platform_runtime_guidance()} {hunter_runtime_guidance()}"
+        ),
         version=__version__,
     )
     register_fofa_tools(server)

@@ -431,7 +431,10 @@ def register_quake_tools(server: MCPServer) -> None:
             "Run a real-time Quake service search using offset pagination. Use this for "
             "small result sets; use quake_service_scroll for deep pagination. This "
             "read-only remote request consumes Quake quota and is throttled to one call "
-            "every 5 seconds. It requires CN_QUAKE_KEY; safe_only never repeats a "
+            "every 5 seconds. Quake correlation pivots use domain:, ip:, icp:, favicon: "
+            "(MD5), cert:, and tls_SAN: joined with AND/OR/NOT; when remaining quota is "
+            "unknown in a multi-source scan, call quake_user_info first. It requires "
+            "CN_QUAKE_KEY; safe_only never repeats a "
             "read/write timeout, while force_retry accepts possible duplicate quota use."
         ),
         annotations=METERED_READ_ONLY_REMOTE_TOOL,

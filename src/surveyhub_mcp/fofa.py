@@ -281,7 +281,10 @@ def register_fofa_tools(server: MCPServer) -> None:
             "set, fofa_host for one host, or fofa_search_stats for aggregation. The "
             "query is Base64-encoded automatically; this read-only request consumes "
             "FOFA account quota, requires CN_FOFA_KEY, and is throttled to one call "
-            "every 0.6 seconds. safe_only never repeats a read/write timeout; use "
+            "every 0.6 seconds. FOFA correlation pivots use domain=, ip=, icp=, "
+            "icon_hash=, and cert= joined with &&; when remaining quota is unknown in a "
+            "multi-source scan, call fofa_user_info first. safe_only never repeats a "
+            "read/write timeout; use "
             "force_retry only when duplicate quota use is acceptable. full=true is "
             "reported as unverified unless FOFA explicitly acknowledges its range."
         ),

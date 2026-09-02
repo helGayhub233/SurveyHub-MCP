@@ -330,7 +330,11 @@ def register_hunter_enterprise_tools(server: MCPServer) -> None:
             "CN_HUNTER_ENTERPRISE_KEY or shared CN_HUNTER_KEY is configured; use "
             "hunter_personal_search for CN_HUNTER_PERSONAL_KEY. The read-only request "
             "consumes quota, runs at most once per second, and uses exact matching by "
-            "default. safe_only avoids replaying uncertain requests; force_retry may "
+            "default. Hunter correlation pivots use domain, ip, icp.number, icp.name, "
+            "web.icon, and web.similar_icon (text fields keep = contains semantics); "
+            "when remaining quota is unknown in a multi-source scan, call "
+            "hunter_enterprise_user_info first. safe_only avoids replaying uncertain "
+            "requests; force_retry may "
             "consume quota twice."
         ),
         annotations=METERED_READ_ONLY_REMOTE_TOOL,

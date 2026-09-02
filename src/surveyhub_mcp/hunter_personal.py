@@ -301,7 +301,11 @@ def register_hunter_personal_tools(server: MCPServer) -> None:
             "hunter_enterprise_search when CN_HUNTER_ENTERPRISE_KEY is configured or "
             "enterprise-only fields are needed. The read-only request consumes quota, "
             "runs at most once per second, and converts quoted comparisons to exact "
-            "matching by default. safe_only avoids replaying uncertain requests; "
+            "matching by default. Hunter correlation pivots use domain, ip, icp.number, "
+            "icp.name, web.icon, and web.similar_icon (text fields keep = contains "
+            "semantics); when remaining quota is unknown in a multi-source scan, call "
+            "hunter_personal_user_info first. safe_only avoids replaying uncertain "
+            "requests; "
             "force_retry may consume quota twice."
         ),
         annotations=METERED_READ_ONLY_REMOTE_TOOL,

@@ -177,7 +177,10 @@ def register_daydaymap_tools(server: MCPServer) -> None:
             "double quotes and && for logical AND. Results are limited to the first "
             "10,000 records (page x page_size <= 10000). See the daydaymap-api "
             "reference resource for complete query syntax. This read-only request "
-            "requires CN_DAYDAYMAP_API_KEY and consumes provider quota. safe_only never "
+            "requires CN_DAYDAYMAP_API_KEY and consumes provider quota. DayDayMap "
+            "correlation pivots use ip=, domain=, icp.number=, icp.name=, web.icon=, "
+            "cert.md5=, and cert.subject.cn=; it exposes no user_info quota probe, so "
+            "insufficient credits return provider error code 2004. safe_only never "
             "repeats a read/write timeout; force_retry accepts possible duplicate quota use."
         ),
         annotations=METERED_READ_ONLY_REMOTE_TOOL,

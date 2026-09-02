@@ -7,6 +7,9 @@ All notable changes to SurveyHub-MCP will be documented in this file.
 ### Changed
 
 - Upgraded the pinned MCP Python SDK from 2.0.0 to 2.1.1 in uv.lock.
+- Search tool descriptions now declare each platform's asset-correlation pivot syntax (domain/IP/ICP/icon/TLS) and instruct probing remaining quota via the matching user_info tool before metered calls.
+- Aggregate server instructions now embed a multi-source discovery workflow: the domain -> IP -> ICP -> icon hash -> TLS fingerprint correlation chain, runtime platform configuration status, quota pre-check guidance, and the DayDayMap error-2004 caveat (no user_info tool).
+- The surveyhub_search_plan prompt now emits a multi-platform correlation plan covering source selection, quota probes, seed queries, cross-platform pivoting, and de-duplication.
 
 ### Added
 

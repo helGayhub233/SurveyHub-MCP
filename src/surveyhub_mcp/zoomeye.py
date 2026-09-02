@@ -139,7 +139,10 @@ def register_zoomeye_tools(server: MCPServer) -> None:
             "Search ZoomEye v2 assets using a paid account. Provide a raw query for "
             "automatic Base64 encoding, or qbase64 when it is already encoded; do not "
             "provide both. Free and legacy APIs are unsupported. This read-only remote "
-            "request requires CN_ZOOMEYE_API_KEY and consumes ZoomEye points. safe_only "
+            "request requires CN_ZOOMEYE_API_KEY and consumes ZoomEye points. ZoomEye "
+            "correlation pivots use domain=, ip=, icp.number=, icp.name=, iconhash= "
+            "(MD5 or MMH3), and ssl.cert.* fields; when remaining points are unknown in "
+            "a multi-source scan, call zoomeye_user_info first. safe_only "
             "never repeats a read/write timeout; force_retry accepts possible duplicate "
             "point use."
         ),

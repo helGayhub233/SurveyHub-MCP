@@ -57,15 +57,29 @@ def register_reference_prompts(server: MCPServer) -> None:
     @server.prompt(
         name="surveyhub_search_plan",
         title="SurveyHub Search Plan",
-        description="Create a safe, platform-aware asset search plan before calling SurveyHub tools.",
+        description="Create a safe, multi-platform asset correlation search plan before calling SurveyHub tools.",
     )
     def surveyhub_search_plan(target: str, platform: str = "auto") -> str:
         return (
-            "Build a concise cyberspace asset search plan.\n"
+            "Build a concise multi-source cyberspace asset search plan.\n"
             f"Target: {target}\n"
-            f"Preferred platform: {platform}\n"
-            "Use the matching SurveyHub syntax reference resource when needed. "
-            "Prefer narrow queries, explain quota-impacting options, and avoid destructive actions."
+            f"Preferred platform: {platform} (use 'auto' to query every configured platform)\n"
+            "1. Sources: identify configured platforms from the server's runtime "
+            "configuration; probe each one's remaining quota with its user_info tool "
+            "before the first metered search (DayDayMap has no user_info; its "
+            "insufficient-credits case surfaces as provider error code 2004).\n"
+            "2. Seed: craft a narrow domain/IP/ICP seed query for the target on each "
+            "configured platform, using that platform's own syntax from its search tool "
+            "description.\n"
+            "3. Correlate: expand along the chain domain -> IP -> ICP -> icon hash -> TLS "
+            "certificate fingerprint; derive sibling values from returned assets and "
+            "query them back across the other platforms (each platform has different "
+            "pivot field syntax).\n"
+            "4. Merge: combine and de-duplicate assets across sources; call out per-source "
+            "coverage gaps instead of treating one platform's result as complete.\n"
+            "Prefer narrow queries, explain quota-impacting options (full, page depth, "
+            "retry), and avoid destructive actions. Never report a platform as "
+            "unavailable when its key is merely not configured."
         )
 
     @server.prompt(
