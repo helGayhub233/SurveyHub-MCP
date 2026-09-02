@@ -24,7 +24,7 @@
 
 ### 通过 pip 安装
 
-要求 Python `>=3.10`，MCP Python SDK `>=2.0.0,<3`（当前锁定并验证 `2.1.1`）。用户无需 clone 源码，可直接从 PyPI 安装：
+要求 Python `>=3.10`，MCP Python SDK `>=2.0.0,<3`（当前 `2.1.1`）。用户无需 clone 源码，可直接从 PyPI 安装：
 
 ```bash
 python -m pip install -U surveyhub-mcp
@@ -288,10 +288,11 @@ API Key 获取入口：
 | FOFA | `fofa_search`, `fofa_search_next` | 本地校验，返回 `cert` 或 `banner` 时 `size <= 2000` |
 | FOFA | `fofa_search`, `fofa_search_next` | 不使用未文档化响应字段控制重试；`full=true` 且供应商未明确确认时，返回 `completeness.state=unknown` |
 | Quake | 全部工具 | 进程内节流，`5 秒/次` |
-| Quake | `quake_service_search`, `quake_service_scroll` | 参数 schema 限制，`size <= 500` |
-| Quake | `quake_service_search`, `quake_service_scroll` | 根据官方可筛选字段清单移除非法 `include/exclude` 字段并返回 warning |
+| Quake | `quake_service_search`, `quake_service_scroll`, `quake_host_search`, `quake_host_scroll` | 参数 schema 限制，`size <= 500` |
+| Quake | `quake_service_search`, `quake_service_scroll`, `quake_host_search`, `quake_host_scroll` | 根据官方可筛选字段清单移除非法 `include/exclude` 字段并返回 warning（服务与主机数据分别按 `/filterable/field/quake_service` 与 `/quake_host` 清单校验） |
 | Quake | 搜索与聚合工具 | 默认 `safe_only` 仅重试确认未发送的失败；读/写超时不自动重发，`aggressive` 模式的多次 HTTP 尝试会返回可能重复消耗配额的 warning |
-| Quake | `quake_service_aggregation` | 本地校验聚合字段最多 2 个，参数 schema 限制 `size <= 10000` |
+| Quake | `quake_service_aggregation`, `quake_host_aggregation` | 本地校验聚合字段最多 2 个，参数 schema 限制 `size <= 10000` |
+| Quake | `quake_similar_icon` | 参数 schema 限制：`favicon_hash` 必须为 32 位 MD5，`similar` 范围 `0-1`，`size <= 50` |
 | ZoomEye | `zoomeye_search` | 仅调用付费账号 `POST /v2/search`，参数 schema 限制 `pagesize <= 10000` |
 | Hunter 个人版 | 全部搜索工具 | 基于 API Key 的 SQLite 跨进程共享节流，`1 秒/次` |
 | Hunter 个人版 | 搜索和批量查询语句 | 默认将 `field="value"` 转为 `field=="value"` 精确查询，但文本搜索类字段（`domain`、`web.title`、`web.body`、`header`、`cert`、`cert.subject`、`protocol.banner`、`icp.web_name`、`icp.name`、`domain.cname`、`ip.tag`、`web.tag`、`web.similar`、`web.similar_id`、`after`、`before`）保留 `=` 包含语义；可用 `exact_search=false` 对所有字段保留平台包含语义 |
