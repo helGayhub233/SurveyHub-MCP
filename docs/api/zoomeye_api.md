@@ -2,10 +2,10 @@
 
 来源：
 
-- `https://www.zoomeye.org/doc`
-- 本地参考：`zoomeye/server.py`、`zoomeye/prompts.py`
+- `https://www.zoomeye.org/doc`（API v2 参考手册，页面更新时间 2024-12-04，2026-09-02 复核无变更）
+- 本地实现参考：`src/surveyhub_mcp/zoomeye.py`
 
-抓取时间：2026-05-14
+抓取时间：2026-09-02
 
 ## 基础信息
 
