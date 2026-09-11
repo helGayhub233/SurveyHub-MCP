@@ -1,3 +1,5 @@
+> MCP 本地预算：搜索单页最多 1000 条（FOFA body 字段最多 500 条），Quake 聚合最多 1000 个桶。下文上游 API 上限不代表 MCP 可请求上限；按工具 schema 调用。
+
 # FOFA API 文档
 
 来源：`https://fofa.info/api`
@@ -50,7 +52,7 @@ GET /api/v1/search/all
 | `qbase64` | 是 | string | 查询语法的 Base64 编码结果 |
 | `fields` | 否 | string | 逗号分隔的返回字段，默认 `host,ip,port` |
 | `page` | 否 | int | 页码，默认第 1 页 |
-| `size` | 否 | int | 每页数量，默认 `100`，最大 `10000` |
+| `size` | 否 | int | 每页数量，默认 `100`，最大 `1000`（MCP 单次上限；上游文档上限可能更高） |
 | `full` | 否 | boolean | 默认查询一年内数据，`true` 查询全部数据 |
 | `r_type` | 否 | string | 指定为 `json` 时返回 JSON |
 
@@ -144,7 +146,7 @@ GET /api/v1/search/next
 | `key` | 是 | string | API Key |
 | `qbase64` | 是 | string | 查询语法的 Base64 编码结果 |
 | `fields` | 否 | string | 逗号分隔的返回字段，默认 `host,ip,port` |
-| `size` | 否 | int | 每页数量，默认 `100`，最大 `10000` |
+| `size` | 否 | int | 每页数量，默认 `100`，最大 `1000`（MCP 单次上限；上游文档上限可能更高） |
 | `next` | 否 | string | 上一次响应返回的翻页 ID；不传时返回第一页 |
 | `full` | 否 | boolean | 默认查询一年内数据，`true` 查询全部数据 |
 | `r_type` | 否 | string | 指定为 `json` 时返回 JSON |

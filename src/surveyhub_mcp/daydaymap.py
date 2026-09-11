@@ -175,12 +175,15 @@ def register_daydaymap_tools(server: MCPServer) -> None:
         description=(
             "Search DayDayMap assets with automatic Base64 query encoding. Use English "
             "double quotes and && for logical AND. Results are limited to the first "
-            "10,000 records (page x page_size <= 10000). See the daydaymap-api "
+            "10,000 records (page x page_size <= 10000); page_size is capped at 1000 "
+            "per MCP call. See the daydaymap-api "
             "reference resource for complete query syntax. This read-only request "
             "requires CN_DAYDAYMAP_API_KEY and consumes provider quota. DayDayMap "
             "correlation pivots use ip=, domain=, icp.number=, icp.name=, web.icon=, "
-            "cert.md5=, and cert.subject.cn=; it exposes no user_info quota probe, so "
-            "insufficient credits return provider error code 2004. safe_only never "
+            "cert.md5=, and cert.subject.cn= (SHA256 certificate values are returned in "
+            "SSL details but are not a supported query node); it exposes no user_info quota probe, so "
+            "insufficient credits return provider error code 2004. Each call returns one "
+            "bounded page; request later pages explicitly. safe_only never "
             "repeats a read/write timeout; force_retry accepts possible duplicate quota use."
         ),
         annotations=METERED_READ_ONLY_REMOTE_TOOL,
@@ -200,7 +203,7 @@ def register_daydaymap_tools(server: MCPServer) -> None:
             ),
         ],
         page: Annotated[int, Field(ge=1, le=10000, description="Page number, 1-10000.")] = 1,
-        page_size: Annotated[int, Field(ge=1, le=10000, description="Results per page, max 10000.")] = 10,
+        page_size: Annotated[int, Field(ge=1, le=1000, description="Results per page, capped at 1000 per MCP call.")] = 10,
         fields: Annotated[
             str | None,
             Field(

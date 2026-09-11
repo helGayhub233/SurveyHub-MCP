@@ -3,9 +3,9 @@
 <p align="center">聚合 FOFA、Quake、Hunter、ZoomEye 与 DayDayMap 的空间测绘 MCP Server</p>
 
 <p align="center">
-  <img src="https://badgen.net/pypi/v/surveyhub-mcp?label=PyPI&color=3775A9&cache=300&version=1.19.0" alt="PyPI v1.19.0"/>
+  <img src="https://badgen.net/pypi/v/surveyhub-mcp?label=PyPI&color=3775A9&cache=300&version=1.20.0" alt="PyPI v1.20.0"/>
   <img src="https://badgen.net/badge/Python/%3E%3D3.10/3776AB" alt="Python >=3.10"/>
-  <img src="https://badgen.net/badge/MCP%20SDK/2.1.1/6F42C1" alt="MCP SDK 2.1.1"/>
+  <img src="https://badgen.net/badge/MCP%20SDK/2.2.0/6F42C1" alt="MCP SDK 2.2.0"/>
   <img src="https://badgen.net/pypi/dm/surveyhub-mcp?label=Downloads&color=2EA44F&cache=86400" alt="PyPI 下载量"/>
   <img src="https://badgen.net/github/license/helGayhub233/SurveyHub-MCP?label=License&color=blue" alt="许可证"/>
 </p>
@@ -24,7 +24,7 @@
 
 ### 通过 pip 安装
 
-要求 Python `>=3.10`，MCP Python SDK `>=2.0.0,<3`（当前 `2.1.1`）。用户无需 clone 源码，可直接从 PyPI 安装：
+要求 Python `>=3.10`，MCP Python SDK `mcp[cli]>=2.2.0,<3`（当前 `2.2.0`）。用户无需 clone 源码，可直接从 PyPI 安装：
 
 ```bash
 python -m pip install -U surveyhub-mcp
@@ -128,6 +128,10 @@ uv run daydaymap-mcp
 ```
 
 ## MCP 配置
+
+### 资产关联公式
+
+官方能力关系为：`ICP单位名称 <-> 域名 <-> IP <-> 证书指纹 <-> 图标Hash`。用户只需提供一个节点，MCP 会在所有已配置平台中用各自原生语法播种，并双向遍历上述关系；当某个平台不支持该节点时，先从其他平台派生它支持的相邻节点（例如 ICP 单位名称 -> 域名或备案号）再回查。
 
 从源码运行时，推荐使用 `uv --directory` 固定项目目录。使用 PyPI 包时可直接参考上方 `pip` 或 `uvx` 配置。
 
@@ -291,16 +295,16 @@ API Key 获取入口：
 | Quake | `quake_service_search`, `quake_service_scroll`, `quake_host_search`, `quake_host_scroll` | 参数 schema 限制，`size <= 500` |
 | Quake | `quake_service_search`, `quake_service_scroll`, `quake_host_search`, `quake_host_scroll` | 根据官方可筛选字段清单移除非法 `include/exclude` 字段并返回 warning（服务与主机数据分别按 `/filterable/field/quake_service` 与 `/quake_host` 清单校验） |
 | Quake | 搜索与聚合工具 | 默认 `safe_only` 仅重试确认未发送的失败；读/写超时不自动重发，`aggressive` 模式的多次 HTTP 尝试会返回可能重复消耗配额的 warning |
-| Quake | `quake_service_aggregation`, `quake_host_aggregation` | 本地校验聚合字段最多 2 个，参数 schema 限制 `size <= 10000` |
+| Quake | `quake_service_aggregation`, `quake_host_aggregation` | 本地校验聚合字段最多 2 个，参数 schema 限制 `size <= 1000` |
 | Quake | `quake_similar_icon` | 参数 schema 限制：`favicon_hash` 必须为 32 位 MD5，`similar` 范围 `0-1`，`size <= 50` |
-| ZoomEye | `zoomeye_search` | 仅调用付费账号 `POST /v2/search`，参数 schema 限制 `pagesize <= 10000` |
+| ZoomEye | `zoomeye_search` | 仅调用付费账号 `POST /v2/search`，参数 schema 限制 `pagesize <= 1000` |
 | Hunter 个人版 | 全部搜索工具 | 基于 API Key 的 SQLite 跨进程共享节流，`1 秒/次` |
 | Hunter 个人版 | 搜索和批量查询语句 | 默认将 `field="value"` 转为 `field=="value"` 精确查询，但文本搜索类字段（`domain`、`web.title`、`web.body`、`header`、`cert`、`cert.subject`、`protocol.banner`、`icp.web_name`、`icp.name`、`domain.cname`、`ip.tag`、`web.tag`、`web.similar`、`web.similar_id`、`after`、`before`）保留 `=` 包含语义；可用 `exact_search=false` 对所有字段保留平台包含语义 |
 | Hunter 个人版 | 批量任务 | 工具描述提示平台限制：`all <= 10`，`ip/domain/company <= 100` |
 | Hunter 企业版 | 全部搜索工具 | 基于 API Key 的 SQLite 跨进程共享节流，`1 秒/次` |
 | Hunter 企业版 | 搜索和批量查询语句 | 默认将 `field="value"` 转为 `field=="value"` 精确查询，但文本搜索类字段（`domain`、`web.title`、`web.body`、`header`、`cert`、`cert.subject`、`protocol.banner`、`icp.web_name`、`icp.name`、`domain.cname`、`ip.tag`、`web.tag`、`web.similar`、`web.similar_id`、`after`、`before`）保留 `=` 包含语义；可用 `exact_search=false` 对所有字段保留平台包含语义 |
 | Hunter 企业版 | 批量任务 | 工具描述提示平台限制：`all <= 10`，`ip/domain/company <= 10000` |
-| DayDayMap | `daydaymap_search` | 本地拒绝空白查询；限制 `page <= 10000`、`page_size <= 10000`、`page × page_size <= 10000`；应用层错误（HTTP 200 但 `code!=200`）时 `meta.execution.final_state` 重写为 `confirmed_failure` |
+| DayDayMap | `daydaymap_search` | 本地拒绝空白查询；限制 `page <= 10000`、`page_size <= 1000`、`page × page_size <= 10000`；应用层错误（HTTP 200 但 `code!=200`）时 `meta.execution.final_state` 重写为 `confirmed_failure` |
 | 全部平台 | 全部 HTTP 请求 | 进程内熔断保护，连续 3 次可恢复失败后暂停 15 秒 |
 
 搜索响应的顶层 `meta` 包含 MCP 实际执行信息，例如 `original_query`、`executed_query`、`attempts` 和 `partial_data`；顶层 `warnings` 保留不会使请求失败、但可能影响完整性的供应商或参数提示。
@@ -335,7 +339,6 @@ src/
     reference.py          # MCP resources 和 prompts
     common.py             # 共享编码、HTTP、错误处理和节流工具
 glama.json                # Glama 注册表维护者声明
-.github/workflows/        # CI 测试矩阵（Python 3.10–3.13）
 ```
 
 ## 手动编译

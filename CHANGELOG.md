@@ -4,17 +4,37 @@ All notable changes to SurveyHub-MCP will be documented in this file.
 
 ## [Unreleased]
 
-### Changed
-
-- Upgraded the pinned MCP Python SDK from 2.0.0 to 2.1.1 in uv.lock.
-- Search tool descriptions now declare each platform's asset-correlation pivot syntax (domain/IP/ICP/icon/TLS) and instruct probing remaining quota via the matching user_info tool before metered calls.
-- Aggregate server instructions now embed a multi-source discovery workflow: the domain -> IP -> ICP -> icon hash -> TLS fingerprint correlation chain, runtime platform configuration status, quota pre-check guidance, and the DayDayMap error-2004 caveat (no user_info tool).
-- The surveyhub_search_plan prompt now emits a multi-platform correlation plan covering source selection, quota probes, seed queries, cross-platform pivoting, and de-duplication.
-- Quake tools now cover the official host-data API family and similar-icon aggregation added upstream in 2026: quake_host_filterable_fields, quake_host_search, quake_host_scroll, quake_host_aggregation_fields, quake_host_aggregation, and quake_similar_icon (MD5 favicon + similarity threshold). Host include/exclude fields are validated against the host filterable list; host payloads omit the service-only latest field.
+## [1.20.0] - 2026-09-11
 
 ### Added
 
-- Added glama.json maintainer declaration and the GitHub Actions test matrix workflow (Python 3.10-3.13).
+- Added top-level `returned_count`, `truncated`, `completeness`, and `next_action` fields to search responses, with provider pagination signals promoted into the stable response envelope.
+- Added local Hunter batch CSV budgets: input files are limited to 5 MiB and 100 rows by default, with an explicit `max_input_rows` override bounded by each edition's provider limit.
+- Added glama.json maintainer declaration.
+- Added the full resilience, schema, budget, and pagination regression suite to the development tree.
+- Added Quake tools covering the official host-data API family and similar-icon aggregation added upstream in 2026: quake_host_filterable_fields, quake_host_search, quake_host_scroll, quake_host_aggregation_fields, quake_host_aggregation, and quake_similar_icon (MD5 favicon + similarity threshold). Host include/exclude fields are validated against the host filterable list; host payloads omit the service-only latest field.
+- Added the single-target discovery workflow: infer the target node, query every configured source in one batch, default to the last 1 year, classify icon hashes as official or vendor provenance, and merge/deduplicate the final relationship graph.
+- Added a stable target/asset/relationship/icon-evidence/coverage output contract to the search-planning prompt.
+
+### Changed
+
+- Upgraded the pinned MCP Python SDK from 2.0.0 to 2.2.0 and declared the `cli` extra in the package dependency.
+- Capped high-volume single calls at 1000 results or aggregation buckets for FOFA, ZoomEye, DayDayMap, and Quake aggregation tools.
+- Defaulted Hunter batch exports to an `assets_limit` of 100 and required an explicit user budget before larger collection or export operations.
+- Constrained aggregate search and planning guidance to one bounded page per platform, at most three derived pivots, and 100 total records unless the user explicitly requests exhaustive collection or export.
+- Search tool descriptions now declare each platform's asset-correlation pivot syntax (domain/IP/ICP/icon/TLS) and instruct probing remaining quota via the matching user_info tool before metered calls.
+- Aggregate server instructions now embed a multi-source discovery workflow: the domain -> IP -> ICP -> icon hash -> TLS fingerprint correlation chain, runtime platform configuration status, quota pre-check guidance, and the DayDayMap error-2004 caveat (no user_info tool).
+- The surveyhub_search_plan prompt now emits a multi-platform correlation plan covering source selection, quota probes, seed queries, cross-platform pivoting, and de-duplication.
+- Encoded the official asset-correlation formula (ICP unit name <-> domain <-> IP <-> certificate fingerprint <-> icon hash) into aggregate server guidance and the search-planning prompt, including per-platform node support and sibling-node derivation for unsupported seed nodes.
+- FOFA correlation searches now return domain, IP, ICP, icon hash, and certificate fields by default.
+- ZoomEye searches now return hostname and SSL JARM/JA3S pivot fields by default, while documenting Professional-only icon hash output as an explicit opt-in.
+- Quake and Hunter tool descriptions now expose certificate SHA256/SPKI query pivots; DayDayMap now documents that SSL details can return SHA256 but only certificate MD5 is queryable.
+- Provider `data` output schemas now declare portable JSON container types instead of an unconstrained `any` schema.
+
+### Fixed
+
+- Search failures and conflicting pagination evidence no longer claim a complete dataset or recommend another page.
+- Hunter batch validation failures now return structured errors and never send a remote task request after local validation fails.
 
 ## [1.19.0] - 2026-08-03
 

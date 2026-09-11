@@ -1,3 +1,5 @@
+> MCP 本地预算：搜索单页最多 1000 条（FOFA body 字段最多 500 条），Quake 聚合最多 1000 个桶。下文上游 API 上限不代表 MCP 可请求上限；按工具 schema 调用。
+
 # Quake API 文档
 
 来源：`https://quake.360.net/quake/#/help?id=5e77423bcb9954d2f8a01656&title=%E4%BD%BF%E7%94%A8%E8%AF%B4%E6%98%8E`
@@ -560,7 +562,7 @@ POST /api/v3/aggregation/quake_service
 | `query` | 是 | string | `*` | 查询语句 |
 | `rule` | 否 | string | 无 | 类型为 IP 列表的服务数据收藏名称 |
 | `ip_list` | 否 | List[string] | 无 | IP 列表 |
-| `size` | 否 | int | `5` | 每项聚合数据数量，最大 `10000` |
+| `size` | 否 | int | `5` | 每项聚合数据数量，最大 `1000`（MCP 单次上限；上游最大 10000） |
 | `ignore_cache` | 否 | bool | `false` | 是否忽略缓存 |
 | `aggregation_list` | 是 | List[string] | 无 | 聚合字段列表，最多支持两个字段 |
 | `start_time` | 否 | string | 无 | 查询起始时间，格式 `2020-10-14 00:00:00`，时区 UTC |
@@ -788,7 +790,7 @@ POST /api/v3/aggregation/quake_host
 | `query` | 是 | string | `*` | 查询语句 |
 | `rule` | 否 | string | 无 | 类型为 IP 列表的主机数据收藏名称 |
 | `ip_list` | 否 | List[string] | 无 | IP 列表 |
-| `size` | 否 | int | `5` | 每项聚合数据个数，最大 `10000` |
+| `size` | 否 | int | `5` | 每项聚合数据个数，最大 `1000`（MCP 单次上限；上游最大 10000） |
 | `ignore_cache` | 否 | bool | `false` | 是否忽略缓存 |
 | `aggregation_list` | 是 | List[string] | 无 | 聚合字段列表，最多支持两个字段 |
 | `start_time` | 否 | string | 无 | 查询起始时间，格式 `2020-10-14 00:00:00`，时区 UTC |

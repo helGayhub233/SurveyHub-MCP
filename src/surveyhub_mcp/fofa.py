@@ -39,6 +39,7 @@ FOFA_SEARCH_FIELDS = (
     "product.version, icon_hash, cert.is_valid, cname_domain, body, "
     "cert.is_match, cert.is_equal, icon, fid, structinfo"
 )
+FOFA_CORRELATION_FIELDS = "host,ip,port,domain,icp,icon_hash,cert"
 
 FOFA_STATS_FIELDS = (
     "protocol, domain, port, title, os, server, country, asn, org, "
@@ -144,7 +145,7 @@ async def search_fofa(
     query: str,
     size: int = 100,
     page: int = 1,
-    fields: str = "host,ip,port,domain,title",
+    fields: str = FOFA_CORRELATION_FIELDS,
     full: bool = False,
     r_type: str = "json",
     retry_mode: str = "safe_only",
@@ -182,7 +183,7 @@ async def search_fofa_next(
     query: str,
     size: int = 100,
     next_id: str | None = None,
-    fields: str = "host,ip,port,domain,title",
+    fields: str = FOFA_CORRELATION_FIELDS,
     full: bool = False,
     r_type: str = "json",
     retry_mode: str = "safe_only",
@@ -285,7 +286,10 @@ def register_fofa_tools(server: MCPServer) -> None:
             "icon_hash=, and cert= joined with &&; when remaining quota is unknown in a "
             "multi-source scan, call fofa_user_info first. safe_only never repeats a "
             "read/write timeout; use "
-            "force_retry only when duplicate quota use is acceptable. full=true is "
+            "force_retry only when duplicate quota use is acceptable. The MCP page size is "
+            "capped at 1000; use fofa_search_next for additional pages. Correlation "
+            "searches default to returning domain, IP, ICP, icon hash, and certificate "
+            "pivots; full=false keeps the default one-year range. full=true is "
             "reported as unverified unless FOFA explicitly acknowledges its range."
         ),
         annotations=METERED_READ_ONLY_REMOTE_TOOL,
@@ -295,9 +299,9 @@ def register_fofa_tools(server: MCPServer) -> None:
             str,
             Field(description='FOFA query, for example body="admin" or domain="example.com" && port="443".'),
         ],
-        size: Annotated[int, Field(ge=1, le=10000, description="Results per page.")] = 100,
+        size: Annotated[int, Field(ge=1, le=1000, description="Results per page, capped at 1000 to keep MCP responses bounded.")] = 100,
         page: Annotated[int, Field(ge=1, description="Page number, starting from 1.")] = 1,
-        fields: Annotated[str, Field(description="Comma-separated return fields.")] = "host,ip,port,domain,title",
+        fields: Annotated[str, Field(description="Comma-separated return fields.")] = FOFA_CORRELATION_FIELDS,
         full: Annotated[bool, Field(description="Set true to search all data instead of one-year data.")] = False,
         r_type: Annotated[str, Field(description='Response type. Use "json" for JSON responses.')] = "json",
         retry_mode: Annotated[str, Field(pattern="^(never|safe_only|aggressive)$", description="Retry policy. safe_only retries only failures known to occur before sending the request; aggressive may duplicate quota use.")] = "safe_only",
@@ -323,13 +327,14 @@ def register_fofa_tools(server: MCPServer) -> None:
             "value as next_id; this read-only request consumes FOFA account quota and "
             "requires CN_FOFA_KEY. It is throttled to one call every 0.6 seconds; "
             "safe_only never repeats a read/write timeout, and force_retry accepts "
-            "possible duplicate quota use."
+            "possible duplicate quota use. Each call returns one bounded page; follow the "
+            "returned next token explicitly rather than looping automatically."
         ),
         annotations=METERED_READ_ONLY_REMOTE_TOOL,
     )
     async def fofa_search_next(
         query: Annotated[str, Field(description="FOFA query to encode as qbase64.")],
-        size: Annotated[int, Field(ge=1, le=10000, description="Results per page.")] = 100,
+        size: Annotated[int, Field(ge=1, le=1000, description="Results per page, capped at 1000 to keep MCP responses bounded.")] = 100,
         next_id: Annotated[str | None, Field(description="Next page token returned by the previous response.")] = None,
         fields: Annotated[str, Field(description="Comma-separated return fields.")] = "host,ip,port,domain,title",
         full: Annotated[bool, Field(description="Set true to search all data instead of one-year data.")] = False,

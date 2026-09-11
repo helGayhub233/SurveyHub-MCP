@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from mcp.server import MCPServer
@@ -27,6 +26,7 @@ from .common import (
     platform_env,
     request_download,
     request_json,
+    validate_batch_csv_file,
 )
 from .reference import register_reference_resources
 
@@ -97,7 +97,7 @@ def _add_optional_params(
     status_code: str | None = None,
     fields: str | None = None,
     search_type: str | None = None,
-    assets_limit: int | None = None,
+    assets_limit: int | None = 100,
 ) -> dict[str, str | int]:
     optional: dict[str, str | int | None] = {
         "start_time": start_time,
@@ -172,7 +172,8 @@ async def create_hunter_enterprise_batch_task(
     status_code: str | None = None,
     fields: str | None = None,
     search_type: Literal["all", "ip", "domain", "company"] = "all",
-    assets_limit: int | None = None,
+    assets_limit: int | None = 100,
+    max_input_rows: int = 100,
     exact_search: bool = True,
 ) -> dict[str, Any]:
     """Create a Hunter enterprise batch search task."""
@@ -202,13 +203,21 @@ async def create_hunter_enterprise_batch_task(
     )
 
     if file_path:
-        path = Path(file_path).expanduser()
-        if not path.is_file():
+        provider_max_rows = 10 if search_type == "all" else 10000
+        path, validation_error = validate_batch_csv_file(
+            file_path,
+            platform="Hunter Enterprise",
+            search_type=search_type,
+            max_input_rows=max_input_rows,
+            provider_max_rows=provider_max_rows,
+        )
+        if validation_error:
+            return validation_error
+        if path is None:
             return error_payload(
                 platform="Hunter Enterprise",
-                message=f"File not found: {path}",
-                error_type="file_not_found",
-                details={"path": str(path)},
+                message="Batch CSV validation did not return a usable file path.",
+                error_type="internal_validation_error",
             )
         with path.open("rb") as file_obj:
             result = await request_json(
@@ -331,7 +340,7 @@ def register_hunter_enterprise_tools(server: MCPServer) -> None:
             "hunter_personal_search for CN_HUNTER_PERSONAL_KEY. The read-only request "
             "consumes quota, runs at most once per second, and uses exact matching by "
             "default. Hunter correlation pivots use domain, ip, icp.number, icp.name, "
-            "web.icon, and web.similar_icon (text fields keep = contains semantics); "
+            "cert.sha-256, web.icon, and web.similar_icon (text fields keep = contains semantics); "
             "when remaining quota is unknown in a multi-source scan, call "
             "hunter_enterprise_user_info first. safe_only avoids replaying uncertain "
             "requests; force_retry may "
@@ -377,8 +386,9 @@ def register_hunter_enterprise_tools(server: MCPServer) -> None:
             "query or local CSV file. Use hunter_enterprise_batch_status until the task "
             "finishes, then use hunter_enterprise_batch_pull for paginated JSON or "
             "hunter_enterprise_batch_download for a local CSV. Creation is "
-            "non-idempotent, consumes quota, is throttled to one call per second, and CSV limits are "
-            "all<=10 or ip/domain/company<=10000."
+            "non-idempotent, consumes quota, and is throttled to one call per second. "
+            "CSV input defaults to 100 rows; max_input_rows may be increased only from an "
+            "explicit user-supplied batch budget (provider limits: all<=10, others<=10000)."
         ),
         annotations=MUTATING_REMOTE_TOOL,
     )
@@ -394,7 +404,8 @@ def register_hunter_enterprise_tools(server: MCPServer) -> None:
             Literal["all", "ip", "domain", "company"],
             Field(description="CSV search type. Enterprise limits: all <=10; ip/domain/company <=10000."),
         ] = "all",
-        assets_limit: Annotated[int | None, Field(ge=1, description="Expected exported asset count.")] = None,
+        assets_limit: Annotated[int | None, Field(ge=1, le=10000, description="Maximum expected exported assets; defaults to 100 and should be raised only from an explicit user budget.")] = 100,
+        max_input_rows: Annotated[int, Field(ge=1, le=10000, description="Maximum CSV input rows accepted; defaults to 100 and may be raised only when the user explicitly requests a larger batch.")] = 100,
         exact_search: Annotated[
             bool,
             Field(description='For query mode, convert field="value" contains comparisons to field=="value" exact comparisons. Set false for native contains matching.'),
@@ -410,6 +421,7 @@ def register_hunter_enterprise_tools(server: MCPServer) -> None:
             fields=fields,
             search_type=search_type,
             assets_limit=assets_limit,
+            max_input_rows=max_input_rows,
             exact_search=exact_search,
         ))
 
@@ -436,7 +448,8 @@ def register_hunter_enterprise_tools(server: MCPServer) -> None:
         description=(
             "Download a completed Hunter enterprise batch export to a local CSV path. "
             "Use hunter_enterprise_batch_pull for paginated JSON instead and check "
-            "hunter_enterprise_batch_status first. This writes local state and may "
+            "hunter_enterprise_batch_status first. Call this only when the user explicitly "
+            "requests the complete CSV export. This writes local state and may "
             "overwrite an existing output_path. The provider request is throttled to "
             "one call per second."
         ),

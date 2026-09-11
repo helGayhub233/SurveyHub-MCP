@@ -1,3 +1,5 @@
+> MCP 本地预算：搜索单页最多 1000 条（FOFA body 字段最多 500 条），Quake 聚合最多 1000 个桶。下文上游 API 上限不代表 MCP 可请求上限；按工具 schema 调用。
+
 # ZoomEye API 文档
 
 来源：
@@ -109,7 +111,7 @@ POST /v2/search
 | `fields` | string | 否 | `ip, port, domain, update_time` | 返回字段，多个字段用英文逗号分隔 |
 | `sub_type` | string | 否 | `v4` | 数据类型，支持 `v4`、`v6`、`web` |
 | `page` | integer | 否 | `1` | 页码，按更新时间排序 |
-| `pagesize` | integer | 否 | `10` | 每页数量；官方文档和当前 MCP schema 限制最大 `10000` |
+| `pagesize` | integer | 否 | `10` | 每页数量；官方文档和当前 MCP schema 限制最大 `1000`（MCP 单次上限） |
 | `facets` | string | 否 | 无 | 聚合统计项，多个字段用英文逗号分隔 |
 | `ignore_cache` | boolean | 否 | `false` | 是否忽略缓存，商业版及以上支持 |
 
@@ -371,7 +373,7 @@ MCP 输入参数：
 | `query` | string | 无 | 原始查询语句，与 `qbase64` 二选一 |
 | `qbase64` | string | 无 | Base64 编码后的 UTF-8 查询语句，与 `query` 二选一 |
 | `page` | integer | `1` | 页码 |
-| `pagesize` | integer | `10` | v2 每页数量；当前 schema 最大 `10000` |
+| `pagesize` | integer | `10` | v2 每页数量；当前 schema 最大 `1000`（MCP 单次上限） |
 | `fields` | string | 无 | 逗号分隔的返回字段 |
 | `sub_type` | string | 无 | `v4`、`v6`、`web` |
 | `facets` | string | 无 | 逗号分隔的统计项 |

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import csv
 import hashlib
 import json
 import logging
@@ -18,7 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from typing import Annotated, Any, Callable, Literal
+from typing import Annotated, Any, Callable, Literal, Union
 
 import httpx
 from mcp.server import MCPServer
@@ -32,6 +33,7 @@ from mcp.types import (
     ToolAnnotations,
 )
 from pydantic import BaseModel, ConfigDict, Field
+from typing_extensions import TypeAliasType
 
 READ_ONLY_REMOTE_TOOL = ToolAnnotations(
     read_only_hint=True,
@@ -248,6 +250,12 @@ class SurveyHubMeta(BaseModel):
     )
 
 
+JSONValue = TypeAliasType(
+    "JSONValue",
+    Union[dict[str, "JSONValue"], list["JSONValue"], str, int, float, bool, None],
+)
+
+
 class SurveyHubResponse(BaseModel):
     """Unified success, error, and download envelope for SurveyHub tools."""
 
@@ -255,12 +263,16 @@ class SurveyHubResponse(BaseModel):
 
     ok: bool = Field(description="Whether the tool operation succeeded.")
     platform: str = Field(description="Provider that handled the operation.")
-    data: Any | None = Field(default=None, description="Provider JSON response for successful API calls.")
+    data: JSONValue = Field(default=None, description="Provider JSON response for successful API calls.")
     text: str | None = Field(default=None, description="Provider text response when JSON is unavailable.")
     error: SurveyHubError | None = Field(default=None, description="Normalized failure details.")
     download: SurveyHubDownload | None = Field(default=None, description="Local export metadata.")
     warnings: list[SurveyHubWarning] | None = Field(default=None, description="Non-fatal provider or wrapper warnings.")
     meta: SurveyHubMeta | None = Field(default=None, description="MCP execution metadata.")
+    returned_count: int = Field(default=0, ge=0, description="Number of records returned in this page when detectable.")
+    truncated: bool = Field(default=False, description="Whether the result is known to be partial or has more pages.")
+    completeness: Literal["complete", "partial", "unknown"] = Field(default="unknown", description="Whether the returned result is complete, partial, or unknown.")
+    next_action: Literal["stop", "call_next_page", "unknown"] = Field(default="unknown", description="Recommended continuation action; do not reconstruct results with a local script.")
 
 
 StructuredToolResult = Annotated[CallToolResult, SurveyHubResponse]
@@ -268,7 +280,88 @@ StructuredToolResult = Annotated[CallToolResult, SurveyHubResponse]
 
 def validated_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """Validate and serialize the unified public response envelope."""
-    return SurveyHubResponse.model_validate(payload).model_dump(exclude_none=True)
+    enriched = dict(payload)
+    returned = _count_result_records(enriched.get("data"))
+    execution = enriched.get("meta", {}).get("execution", {}) if isinstance(enriched.get("meta"), dict) else {}
+    execution_completeness = execution.get("completeness", {}) if isinstance(execution, dict) else {}
+    state = execution_completeness.get("state") if isinstance(execution_completeness, dict) else None
+    if state not in {"complete", "partial", "unknown"}:
+        state = "unknown"
+    # Promote provider pagination signals into the stable MCP envelope. This
+    # prevents the model from guessing whether another page is required.
+    # Transport success is not proof that a dataset is exhausted.
+    if state == "complete":
+        state = "unknown"
+    offset = enriched.get("meta", {}).get("result_offset", 0) if isinstance(enriched.get("meta"), dict) else 0
+    provider_has_more: bool | None = None
+    provider_total: int | None = None
+    for candidate in _pagination_mappings(enriched.get("data"), enriched.get("meta")):
+        if not isinstance(candidate, dict):
+            continue
+        for key in ("has_more", "hasMore", "has_next", "hasNextPage"):
+            if isinstance(candidate.get(key), bool):
+                provider_has_more = candidate[key]
+                break
+        for key in ("total", "total_count", "totalCount"):
+            if type(candidate.get(key)) is int and candidate[key] >= 0:
+                provider_total = candidate[key]
+                break
+    truncated = state == "partial" or provider_has_more is True or (
+        provider_total is not None and provider_total > offset + returned
+    )
+    if provider_has_more is False and not truncated:
+        state = "complete"
+    elif provider_total is not None and provider_total <= offset + returned and not truncated:
+        state = "complete"
+    elif truncated:
+        state = "partial"
+    failed = enriched.get("ok") is False
+    if failed:
+        state, truncated = "unknown", False
+    enriched.update(
+        {
+            "returned_count": returned,
+            "truncated": truncated,
+            "completeness": state,
+            "next_action": "stop" if failed else ("call_next_page" if truncated else ("stop" if state == "complete" else "unknown")),
+        }
+    )
+    return SurveyHubResponse.model_validate(enriched).model_dump(exclude_none=True)
+
+
+def _pagination_mappings(*values: Any) -> list[dict[str, Any]]:
+    """Return shallow/nested mappings that commonly carry page metadata."""
+    mappings: list[dict[str, Any]] = []
+    queue = [value for value in values if isinstance(value, dict)]
+    seen: set[int] = set()
+    while queue:
+        current = queue.pop(0)
+        marker = id(current)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        mappings.append(current)
+        for key in ("data", "meta", "pagination", "page"):
+            child = current.get(key)
+            if isinstance(child, dict):
+                queue.append(child)
+    return mappings
+
+
+def _count_result_records(value: Any) -> int:
+    """Best-effort count for common provider result containers."""
+    if isinstance(value, list):
+        return len(value)
+    if isinstance(value, dict):
+        for key in ("results", "items", "records", "list", "data"):
+            child = value.get(key)
+            if isinstance(child, list):
+                return len(child)
+            if isinstance(child, dict):
+                count = _count_result_records(child)
+                if count:
+                    return count
+    return 0
 
 
 def enrich_payload(
@@ -299,9 +392,8 @@ class SurveyHubMCPServer(MCPServer):
                 connection.state[_LOG_LEVEL_STATE_KEY] = params.level
             return EmptyResult()
 
-        # MCPServer has no high-level decorator for the legacy 2025-11-25
-        # logging method. Registering the typed handler also advertises the
-        # logging capability; 2026-07-28 clients use request-level opt-in.
+        # MCPServer has no high-level decorator for the legacy logging method.
+        # Registering this typed handler also advertises logging capability.
         self._lowlevel_server.add_request_handler(
             "logging/setLevel",
             SetLevelRequestParams,
@@ -490,8 +582,9 @@ class SQLiteRateLimitCoordinator:
         identity: str,
         updater: Callable[[tuple[float, float] | None], tuple[float, float, Any]],
     ) -> Any:
-        self._state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-        os.chmod(self._state_dir, 0o700)
+        # POSIX 0700 intentionally restricts the state directory to its owner.
+        self._state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)  # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
+        os.chmod(self._state_dir, 0o700)  # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
         database_descriptor = os.open(self._database_path, os.O_CREAT | os.O_RDWR, 0o600)
         os.close(database_descriptor)
         key_hash = self.identity_hash(identity)
@@ -646,20 +739,20 @@ HUNTER_EXACT_SEARCH_EXCLUDED_FIELDS = {
     "after", "before",
     # Text-search fields where Hunter's = already means "contains".
     # Converting these to == would silently shrink results to exact-only matches.
-    "web.title",        # "从网站标题中搜索"
-    "web.body",         # "搜索网站正文包含"
-    "domain",           # "搜索域名包含"
-    "header",           # "搜索 HTTP 响应头中含有"
-    "protocol.banner",  # "查询端口响应中包含"
-    "cert",             # "搜索证书中带有"
-    "cert.subject",     # "搜索证书使用者包含"
-    "icp.web_name",     # "搜索 ICP 备案网站名中含有"
-    "icp.name",         # "搜索 ICP 备案单位名中含有"
-    "domain.cname",     # "搜索 CNAME 包含"
-    "ip.tag",           # "查询包含 IP 标签"
-    "web.tag",          # "查询包含资产标签"
-    "web.similar",      # similarity search, not equality
-    "web.similar_id",   # similarity search, not equality
+    "web.title",        # Search within website titles.
+    "web.body",         # Search within website body text.
+    "domain",           # Search within domain names.
+    "header",           # Search within HTTP response headers.
+    "protocol.banner",  # Search within service banners.
+    "cert",             # Search within certificate content.
+    "cert.subject",     # Search within certificate subjects.
+    "icp.web_name",     # Search within registered website names.
+    "icp.name",         # Search within registered organization names.
+    "domain.cname",     # Search within CNAME values.
+    "ip.tag",           # Search within IP tags.
+    "web.tag",          # Search within asset tags.
+    "web.similar",      # Perform similarity search rather than equality matching.
+    "web.similar_id",   # Perform similarity search rather than equality matching.
 }
 
 
@@ -744,6 +837,91 @@ def split_csv(value: str | None) -> list[str] | None:
     return items or None
 
 
+def validate_batch_csv_file(
+    file_path: str,
+    *,
+    platform: str,
+    search_type: str,
+    max_input_rows: int,
+    provider_max_rows: int,
+    max_file_bytes: int = 5 * 1024 * 1024,
+) -> tuple[Path | None, dict[str, Any] | None]:
+    """Validate a Hunter CSV locally before a potentially large remote batch call."""
+    if max_input_rows < 1 or provider_max_rows < 1:
+        return None, error_payload(
+            platform=platform,
+            message="Batch row limits must be positive integers.",
+            error_type="validation_error",
+            details={
+                "max_input_rows": max_input_rows,
+                "provider_max_rows": provider_max_rows,
+            },
+        )
+    path = Path(file_path).expanduser()
+    if not path.is_file():
+        return None, error_payload(
+            platform=platform,
+            message=f"File not found: {path}",
+            error_type="file_not_found",
+            details={"path": str(path)},
+        )
+    file_bytes = path.stat().st_size
+    if file_bytes > max_file_bytes:
+        return None, error_payload(
+            platform=platform,
+            message="Batch CSV exceeds the 5 MiB MCP upload limit; split it into bounded batches.",
+            error_type="batch_budget_exceeded",
+            details={"path": str(path), "file_bytes": file_bytes, "max_file_bytes": max_file_bytes},
+        )
+
+    nonempty_rows: list[list[str]] = []
+    try:
+        with path.open("r", encoding="utf-8-sig", newline="") as file_obj:
+            for row in csv.reader(file_obj):
+                if any(cell.strip() for cell in row):
+                    nonempty_rows.append(row)
+                    if len(nonempty_rows) > min(max_input_rows, provider_max_rows) + 1:
+                        break
+    except (OSError, UnicodeError, csv.Error) as error:
+        return None, error_payload(
+            platform=platform,
+            message=f"Unable to read batch CSV: {error}",
+            error_type="invalid_batch_file",
+            details={"path": str(path)},
+        )
+
+    header_names = {"ip", "domain", "company", "target", "query", "search", "value"}
+    has_header = bool(nonempty_rows) and any(
+        cell.strip().lower() in header_names for cell in nonempty_rows[0]
+    )
+    row_count = max(0, len(nonempty_rows) - int(has_header))
+    if row_count == 0:
+        return None, error_payload(
+            platform=platform,
+            message="Batch CSV contains no input rows.",
+            error_type="invalid_batch_file",
+            details={"path": str(path)},
+        )
+    effective_limit = min(max_input_rows, provider_max_rows)
+    if row_count > effective_limit:
+        return None, error_payload(
+            platform=platform,
+            message=(
+                f"Batch CSV has more than {effective_limit} input rows. Split the file or, "
+                "when the user explicitly requested a larger enterprise batch, increase max_input_rows."
+            ),
+            error_type="batch_budget_exceeded",
+            details={
+                "path": str(path),
+                "detected_rows_at_least": row_count,
+                "max_input_rows": max_input_rows,
+                "provider_max_rows": provider_max_rows,
+                "search_type": search_type,
+            },
+        )
+    return path, None
+
+
 def render_json(data: Any) -> str:
     """Render API data as readable JSON text for MCP clients."""
     return json.dumps(data, indent=2, ensure_ascii=False)
@@ -807,12 +985,10 @@ def first_env(names: tuple[str, ...]) -> tuple[str | None, str | None]:
     return None, None
 
 
-# ---------------------------------------------------------------------------
-# Region-prefixed env-var helpers (cn)
-# ---------------------------------------------------------------------------
+# Region-prefixed environment variable helpers.
 
 PLATFORM_PREFIX: dict[str, str] = {
-    # cn: Chinese platforms
+    # The CN prefix identifies Chinese platform credentials.
     "FOFA_KEY": "CN",
     "FOFA_EMAIL": "CN",
     "QUAKE_KEY": "CN",
@@ -990,7 +1166,8 @@ def _retry_backoff_delay(
     """Return capped exponential backoff with jitter when no response headers exist."""
     base_delay = http_policy.retry_base_delay * (2**attempt)
     return _cap_retry_delay(
-        base_delay + random.uniform(0.0, base_delay * 0.25),
+        # Jitter avoids synchronized retries and is not security-sensitive.
+        base_delay + random.uniform(0.0, base_delay * 0.25),  # nosec B311
         http_policy=http_policy,
         rate_limit_policy=rate_limit_policy,
     )
@@ -1134,8 +1311,9 @@ class RequestLedger:
             )
 
     def _connect(self) -> sqlite3.Connection:
-        self._state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-        os.chmod(self._state_dir, 0o700)
+        # POSIX 0700 intentionally restricts the ledger directory to its owner.
+        self._state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)  # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
+        os.chmod(self._state_dir, 0o700)  # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
         descriptor = os.open(self._database_path, os.O_CREAT | os.O_RDWR, 0o600)
         os.close(descriptor)
         connection = sqlite3.connect(self._database_path, timeout=5.0, isolation_level=None)
@@ -1368,9 +1546,13 @@ async def request_json(
                             )},
                         )
                 await circuit_breaker.record_success()
+                request_data = kwargs.get("json") or kwargs.get("params") or {}
+                page_size = next((request_data[k] for k in ("size", "page_size", "pagesize", "limit") if type(request_data.get(k)) is int), 0)
+                result_offset = request_data.get("start", request_data.get("offset", (request_data.get("page", 1) - 1) * page_size))
                 success_result = enrich_payload(
                     response_payload(platform=platform, response=response, attempts=attempt + 1),
                     meta={
+                        "result_offset": result_offset,
                         "execution": _execution_receipt(
                             request_id=request_id,
                             fingerprint=fingerprint,

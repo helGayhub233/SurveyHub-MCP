@@ -1,3 +1,5 @@
+> MCP 批量入口默认限制 CSV 5 MiB、100 行；会在发起远程任务前拒绝超预算文件。
+
 # Hunter 企业版 API 文档
 
 来源：`https://hunter.qianxin.com/home/helpCenter`
@@ -113,6 +115,7 @@ POST /openApi/search/batch
 | `fields` | 否 | 返回字段列表，枚举同企业版语法查询接口 |
 | `search_type` | 否 | 上传文件类型，默认 `all` |
 | `assets_limit` | 否 | 预期导出的资产数量 |
+| `max_input_rows` | 否 | MCP CSV 输入行数预算，默认 100；仅在用户明确扩大批量时提高（personal 最大 100，enterprise 最大 10000） |
 
 #### `search_type` 说明
 

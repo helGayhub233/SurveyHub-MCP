@@ -749,7 +749,7 @@ def register_quake_tools(server: MCPServer) -> None:
             "small result sets; use quake_service_scroll for deep pagination. This "
             "read-only remote request consumes Quake quota and is throttled to one call "
             "every 5 seconds. Quake correlation pivots use domain:, ip:, icp:, favicon: "
-            "(MD5), cert:, and tls_SAN: joined with AND/OR/NOT; when remaining quota is "
+            "(MD5), cert:, tls_SAN:, tls_sha256:, and tls_SPKI: joined with AND/OR/NOT; when remaining quota is "
             "unknown in a multi-source scan, call quake_user_info first. It requires "
             "CN_QUAKE_KEY; safe_only never repeats a "
             "read/write timeout, while force_retry accepts possible duplicate quota use."
@@ -910,7 +910,7 @@ def register_quake_tools(server: MCPServer) -> None:
     async def quake_service_aggregation(
         query: Annotated[str, Field(description='Quake query, for example country:"China".')],
         aggregation_list: Annotated[str, Field(description="One or two comma-separated aggregation fields, for example service or country,service.")],
-        size: Annotated[int, Field(ge=1, le=10000, description="Aggregation bucket count per field.")] = 5,
+        size: Annotated[int, Field(ge=1, le=1000, description="Aggregation bucket count per field, capped at 1000 per MCP call.")] = 5,
         rule: Annotated[str | None, Field(description="Service data collection rule name for IP-list collections.")] = None,
         ip_list: Annotated[str | None, Field(description="Comma-separated IP list.")] = None,
         ignore_cache: Annotated[bool, Field(description="Whether to ignore cached data.")] = False,
@@ -1066,7 +1066,7 @@ def register_quake_tools(server: MCPServer) -> None:
     async def quake_host_aggregation(
         query: Annotated[str, Field(description='Quake query, for example org:"Example Inc".')],
         aggregation_list: Annotated[str, Field(description="One or two comma-separated host aggregation fields, for example org or org,country_cn.")],
-        size: Annotated[int, Field(ge=1, le=10000, description="Aggregation bucket count per field, up to 10000.")] = 5,
+        size: Annotated[int, Field(ge=1, le=1000, description="Aggregation bucket count per field, capped at 1000 per MCP call.")] = 5,
         rule: Annotated[str | None, Field(description="Host-data collection rule name for IP-list collections.")] = None,
         ip_list: Annotated[str | None, Field(description="Comma-separated IP list.")] = None,
         ignore_cache: Annotated[bool, Field(description="Whether to ignore cached data.")] = False,

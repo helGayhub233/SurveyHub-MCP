@@ -10,6 +10,7 @@ dist/
 wheels/
 
 # Test / coverage / lint caches
+tests/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/

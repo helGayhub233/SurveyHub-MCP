@@ -24,7 +24,7 @@ from .reference import register_reference_resources
 
 ZOOMEYE_BASE_URL = "https://api.zoomeye.org"
 ZOOMEYE_KEY_URL = "https://www.zoomeye.org -> Profile -> API Key"
-ZOOMEYE_DEFAULT_FIELDS = "ip,port,domain,update_time"
+ZOOMEYE_DEFAULT_FIELDS = "ip,port,domain,url,hostname,ssl.jarm,ssl.ja3s,update_time"
 ZOOMEYE_FACETS = "country, subdivisions, city, product, service, device, os, port"
 
 
@@ -144,7 +144,10 @@ def register_zoomeye_tools(server: MCPServer) -> None:
             "(MD5 or MMH3), and ssl.cert.* fields; when remaining points are unknown in "
             "a multi-source scan, call zoomeye_user_info first. safe_only "
             "never repeats a read/write timeout; force_retry accepts possible duplicate "
-            "point use."
+            "point use. Each call returns one bounded page (maximum 1000 records); "
+            "request later pages explicitly. Defaults include all-user hostname and "
+            "SSL JARM/JA3S pivot fields; iconhash_md5 is available to request for "
+            "Professional+ accounts but is not enabled by default."
         ),
         annotations=METERED_READ_ONLY_REMOTE_TOOL,
     )
@@ -160,7 +163,7 @@ def register_zoomeye_tools(server: MCPServer) -> None:
         page: Annotated[int, Field(ge=1, description="Page number sorted by update time.")] = 1,
         pagesize: Annotated[
             int,
-            Field(ge=1, le=10000, description="Results per page. Official v2 maximum is 10000."),
+            Field(ge=1, le=1000, description="Results per page, capped at 1000 per MCP call (provider maximum is higher)."),
         ] = 10,
         fields: Annotated[
             str,

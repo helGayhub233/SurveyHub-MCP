@@ -1,3 +1,5 @@
+> MCP 本地预算：搜索单页最多 1000 条（FOFA body 字段最多 500 条），Quake 聚合最多 1000 个桶。下文上游 API 上限不代表 MCP 可请求上限；按工具 schema 调用。
+
 # DayDayMap API 文档
 
 来源：`https://www.daydaymap.com/help/document`
@@ -14,7 +16,7 @@
 
 ## 使用限制
 
-- 每页最大条数：`10000` 条/页。
+- MCP 每页最多 `1000` 条；上游最多可到 `10000` 条/页。
 - 最多只能查看前 `10000` 条数据（`page × page_size` 的偏移不超过 10000）。
 - 搜索字符串须使用**英文双引号** `""`，不区分大小写。
 - API 语法检索消耗 `1 积分/次`；查看 IPv4 数据 `1 积分/条`，IPv6 数据 `3 积分/条`。
@@ -61,7 +63,7 @@ POST /api/v1/raymap/search/all
 | 参数 | 必填 | 类型 | 说明 |
 | --- | --- | --- | --- |
 | `page` | 是 | number | 页码，范围 1–10000 |
-| `page_size` | 是 | number | 每页条数，最大 10000 |
+| `page_size` | 是 | number | 每页条数，MCP 最大 1000（上游最大 10000） |
 | `keyword` | 是 | string | 搜索语法的 Base64 编码 |
 | `fields` | 否 | string | 逗号分隔的自定义响应字段，优先级高于 `exclude_fields` |
 | `exclude_fields` | 否 | string | 逗号分隔的排除字段，仅当未指定 `fields` 时有效 |
@@ -131,7 +133,7 @@ curl -XPOST -k 'https://www.daydaymap.com/api/v1/raymap/search/all' \
 ### 本地 MCP 请求控制
 
 - DayDayMap API 始终返回 HTTP 200，因此本地模块会额外解析 JSON 响应中的 `code` 字段，对非 200 的业务错误码做可读性翻译。
-- 参数 schema 限制 `page` 范围 1–10000、`page_size` 范围 1–10000，请求前还会校验 `page × page_size <= 10000`。
+- 参数 schema 限制 `page` 范围 1–10000、`page_size` 范围 1–1000（MCP；上游最大 10000），请求前还会校验 `page × page_size <= 10000`。
 - 空白查询会在本地拒绝，不会调用计费接口。
 - 业务错误会区分为鉴权错误、参数错误、权限不足、积分不足、分页越界和平台错误。
 
