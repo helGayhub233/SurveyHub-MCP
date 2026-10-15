@@ -43,7 +43,7 @@ HUNTER_ENTERPRISE_FIELDS = (
 
 HE_RATE_LIMITER = AsyncRateLimiter(
     1.0,
-    namespace="hunter-enterprise",
+    namespace="hunter-account",
     identity_provider=lambda: _hunter_key(),
 )
 
@@ -175,6 +175,7 @@ async def create_hunter_enterprise_batch_task(
     assets_limit: int | None = 100,
     max_input_rows: int = 100,
     exact_search: bool = True,
+    force_retry: bool = False,
 ) -> dict[str, Any]:
     """Create a Hunter enterprise batch search task."""
     if not _hunter_key():
@@ -228,6 +229,8 @@ async def create_hunter_enterprise_batch_task(
                 retryable_body_codes={429},
                 params=params,
                 files={"file": (path.name, file_obj, "text/csv")},
+                metered_request=True,
+                force_retry=force_retry,
                 auth_hint="Authentication failed. Check CN_HUNTER_ENTERPRISE_KEY or CN_HUNTER_KEY.",
                 forbidden_hint="Access forbidden. Your Hunter enterprise account may not have sufficient permissions or credits.",
             )
@@ -240,6 +243,8 @@ async def create_hunter_enterprise_batch_task(
         rate_limiter=HE_RATE_LIMITER,
         retryable_body_codes={429},
         params=params,
+        metered_request=True,
+        force_retry=force_retry,
         auth_hint="Authentication failed. Check CN_HUNTER_ENTERPRISE_KEY or CN_HUNTER_KEY.",
         forbidden_hint="Access forbidden. Your Hunter enterprise account may not have sufficient permissions or credits.",
     )
@@ -263,7 +268,9 @@ async def get_hunter_enterprise_batch_status(*, task_id: str) -> dict[str, Any]:
     )
 
 
-async def download_hunter_enterprise_batch_file(*, task_id: str, output_path: str) -> dict[str, Any]:
+async def download_hunter_enterprise_batch_file(
+    *, task_id: str, output_path: str, overwrite: bool = False,
+) -> dict[str, Any]:
     """Download Hunter enterprise batch export file."""
     if not _hunter_key():
         return _missing_key(recommended_tool="hunter_personal_batch_download")
@@ -273,6 +280,7 @@ async def download_hunter_enterprise_batch_file(*, task_id: str, output_path: st
         method="GET",
         url=f"{HUNTER_BASE_URL}/openApi/search/download/{task_id}",
         output_path=output_path,
+        overwrite=overwrite,
         rate_limiter=HE_RATE_LIMITER,
         retryable_body_codes={429},
         params=_auth_params(),
@@ -410,6 +418,7 @@ def register_hunter_enterprise_tools(server: MCPServer) -> None:
             bool,
             Field(description='For query mode, convert field="value" contains comparisons to field=="value" exact comparisons. Set false for native contains matching.'),
         ] = True,
+        force_retry: Annotated[bool, Field(description="Accept possible duplicate task creation and quota use when replaying a suppressed request.")] = False,
     ) -> StructuredToolResult:
         return mcp_tool_result(await create_hunter_enterprise_batch_task(
             query=query,
@@ -423,6 +432,7 @@ def register_hunter_enterprise_tools(server: MCPServer) -> None:
             assets_limit=assets_limit,
             max_input_rows=max_input_rows,
             exact_search=exact_search,
+            force_retry=force_retry,
         ))
 
     @server.tool(
@@ -450,7 +460,8 @@ def register_hunter_enterprise_tools(server: MCPServer) -> None:
             "Use hunter_enterprise_batch_pull for paginated JSON instead and check "
             "hunter_enterprise_batch_status first. Call this only when the user explicitly "
             "requests the complete CSV export. This writes local state and may "
-            "overwrite an existing output_path. The provider request is throttled to "
+            "replace an existing output_path only with overwrite=true. Files are committed "
+            "atomically; failures preserve an existing file. The provider request is throttled to "
             "one call per second."
         ),
         annotations=LOCAL_FILE_WRITE_TOOL,
@@ -458,8 +469,9 @@ def register_hunter_enterprise_tools(server: MCPServer) -> None:
     async def hunter_enterprise_batch_download(
         task_id: Annotated[str, Field(description="Task ID returned by hunter_enterprise_batch_create.")],
         output_path: Annotated[str, Field(description="Local output CSV path.")],
+        overwrite: Annotated[bool, Field(description="Explicitly allow atomic replacement of an existing output file.")] = False,
     ) -> StructuredToolResult:
-        return mcp_tool_result(await download_hunter_enterprise_batch_file(task_id=task_id, output_path=output_path))
+        return mcp_tool_result(await download_hunter_enterprise_batch_file(task_id=task_id, output_path=output_path, overwrite=overwrite))
 
     @server.tool(
         name="hunter_enterprise_batch_pull",

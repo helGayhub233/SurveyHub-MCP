@@ -11,6 +11,7 @@ from . import __version__
 from .common import (
     METERED_READ_ONLY_REMOTE_TOOL,
     READ_ONLY_REMOTE_TOOL,
+    AsyncRateLimiter,
     StructuredToolResult,
     SurveyHubMCPServer,
     encode_base64,
@@ -25,6 +26,9 @@ from .reference import register_reference_resources
 
 DAYDAYMAP_BASE_URL = "https://www.daydaymap.com"
 DAYDAYMAP_KEY_URL = "https://www.daydaymap.com -> 个人中心 -> 个人信息 -> 复制 API KEY"
+DAYDAYMAP_RATE_LIMITER = AsyncRateLimiter(
+    1.0, namespace="daydaymap-account", identity_provider=lambda: _daydaymap_key(),
+)
 
 DAYDAYMAP_FIELDS = (
     "ip, is_ipv6, is_website, port, protocol, url, continent, country, country_code, "
@@ -47,25 +51,6 @@ DAYDAYMAP_QUERY_CATEGORIES = (
     "证书: cert.issuer, cert.subject, cert.sn, cert.org, cert.md5, cert.is_expired, cert.is_trust, cert.startdate, cert.enddate; "
     "时间: time; 漏洞: vul.cve, vul.dvb; 资产归属: org.name, org.name_prefix"
 )
-
-DAYDAYMAP_ERROR_CODES = {
-    2001: "API KEY 错误，请检查 DAYDAYMAP_API_KEY 配置。",
-    2002: "参数错误，请检查查询语法和请求参数。",
-    2003: "会员权限不足，请在 DayDayMap 平台提升会员权限。",
-    2004: "积分不足，请在 DayDayMap 平台充值后使用。",
-    2005: "最多只能查看前 1 万条数据，请缩小查询范围。",
-    2006: "数据获取失败，请重试。",
-}
-
-DAYDAYMAP_ERROR_TYPES = {
-    2001: "authentication_error",
-    2002: "validation_error",
-    2003: "permission_denied",
-    2004: "insufficient_credits",
-    2005: "pagination_limit",
-    2006: "provider_error",
-}
-
 
 def _daydaymap_key() -> str | None:
     return platform_key("DAYDAYMAP_API_KEY")
@@ -129,6 +114,8 @@ async def search_daydaymap(
         platform="DayDayMap",
         method="POST",
         url=f"{DAYDAYMAP_BASE_URL}/api/v1/raymap/search/all",
+        rate_limiter=DAYDAYMAP_RATE_LIMITER,
+        retry_non_idempotent=True,
         headers=_headers(),
         json=payload,
         retry_mode=retry_mode,
@@ -138,32 +125,7 @@ async def search_daydaymap(
         forbidden_hint="Access forbidden. Your DayDayMap account may not have sufficient permissions.",
     )
 
-    if not result.get("ok"):
-        return result
-
-    data = result.get("data")
-    if not isinstance(data, dict):
-        return result
-
-    code = data.get("code")
-    if code != 200:
-        guidance = DAYDAYMAP_ERROR_CODES.get(code, f"未知错误 (code={code})")
-        provider_message = data.get("msg")
-        meta = dict(result.get("meta") or {})
-        execution = dict(meta.get("execution") or {})
-        execution["final_state"] = "confirmed_failure"
-        meta["execution"] = execution
-        return enrich_payload(
-            error_payload(
-                platform="DayDayMap",
-                message=f"DayDayMap API 错误 (code={code}): {provider_message or guidance}",
-                error_type=DAYDAYMAP_ERROR_TYPES.get(code, "api_error"),
-                details={"code": code, "provider_message": provider_message, "guidance": guidance},
-            ),
-            meta=meta,
-        )
-
-    return result
+    return enrich_payload(result, meta={"original_query": query, "executed_query": query})
 
 
 def register_daydaymap_tools(server: MCPServer) -> None:
@@ -184,7 +146,9 @@ def register_daydaymap_tools(server: MCPServer) -> None:
             "SSL details but are not a supported query node); it exposes no user_info quota probe, so "
             "insufficient credits return provider error code 2004. Each call returns one "
             "bounded page; request later pages explicitly. safe_only never "
-            "repeats a read/write timeout; force_retry accepts possible duplicate quota use."
+            "repeats a read/write timeout; force_retry accepts possible duplicate quota use. "
+            "Local account pacing is one call per second across processes sharing the state "
+            "directory; this is an MCP safeguard, not an upstream rate guarantee."
         ),
         annotations=METERED_READ_ONLY_REMOTE_TOOL,
     )

@@ -6,11 +6,13 @@ import asyncio
 import base64
 import csv
 import hashlib
+import io
 import json
 import logging
 import os
 import random
 import sqlite3
+import tempfile
 import time
 import uuid
 from contextlib import closing
@@ -22,7 +24,9 @@ from pathlib import Path
 from typing import Annotated, Any, Callable, Literal, Union
 
 import httpx
-from mcp.server import MCPServer
+from mcp.server import CacheHint, MCPServer
+from mcp.server.mcpserver.exceptions import ToolError, UnexpectedToolError
+from mcp.shared.exceptions import MCPError
 from mcp.types import (
     CallToolResult,
     EmptyResult,
@@ -32,8 +36,12 @@ from mcp.types import (
     TextContent,
     ToolAnnotations,
 )
-from pydantic import BaseModel, ConfigDict, Field
+from mcp_types.version import MODERN_PROTOCOL_VERSIONS
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from typing_extensions import TypeAliasType
+
+from .contracts import SUCCESS_CODES, integer_code, pagination_info, provider_error, record_container
+from .output_budget import DEFAULT_OUTPUT_POLICY, OutputPolicy, bounded_payload
 
 READ_ONLY_REMOTE_TOOL = ToolAnnotations(
     read_only_hint=True,
@@ -44,7 +52,8 @@ READ_ONLY_REMOTE_TOOL = ToolAnnotations(
 METERED_READ_ONLY_REMOTE_TOOL = ToolAnnotations(
     read_only_hint=True,
     destructive_hint=False,
-    # A search does not mutate provider data, but replaying it can consume quota.
+    # Quota/replay policy is carried in descriptions and meta.execution; MCP
+    # idempotentHint has no defined effect when readOnlyHint is true.
     idempotent_hint=False,
     open_world_hint=True,
 )
@@ -64,6 +73,20 @@ LOCAL_FILE_WRITE_TOOL = ToolAnnotations(
 _LOGGER = logging.getLogger(__name__)
 _LOG_LEVELS = ("debug", "info", "notice", "warning", "error", "critical", "alert", "emergency")
 _LOG_LEVEL_STATE_KEY = "surveyhub.logging.level"
+_LOG_LEVEL_META_KEY = "io.modelcontextprotocol/logLevel"
+RESPONSE_SCHEMA_URI = "surveyhub://reference/response-schema"
+
+# Tool availability and discovery instructions depend on the process's
+# credential configuration. They can be reused by one caller, but not shared
+# across authorization contexts. Reference documents are identical for all.
+DEFAULT_CACHE_HINTS = {
+    "tools/list": CacheHint(ttl_ms=300_000, scope="private"),
+    "server/discover": CacheHint(ttl_ms=300_000, scope="private"),
+    "prompts/list": CacheHint(ttl_ms=300_000, scope="public"),
+    "resources/list": CacheHint(ttl_ms=300_000, scope="public"),
+    "resources/templates/list": CacheHint(ttl_ms=300_000, scope="public"),
+    "resources/read": CacheHint(ttl_ms=3_600_000, scope="public"),
+}
 
 
 @dataclass
@@ -100,9 +123,13 @@ def _log_level_enabled(context: Any, level: str) -> bool:
     """Apply legacy connection-level or modern request-level log filtering."""
     session = context.session
     if session.protocol_version >= "2026-07-28":
-        return level in getattr(session, "_allowed_log_levels", ())
-    connection = _connection_for(context)
-    configured = connection.state.get(_LOG_LEVEL_STATE_KEY, "warning") if connection else "warning"
+        # Request metadata is public; the SDK's private log-filter state is not.
+        configured = (context.meta or {}).get(_LOG_LEVEL_META_KEY)
+        if configured not in _LOG_LEVELS:
+            return False
+    else:
+        connection = _connection_for(context)
+        configured = connection.state.get(_LOG_LEVEL_STATE_KEY, "warning") if connection else "warning"
     try:
         return _LOG_LEVELS.index(level) >= _LOG_LEVELS.index(configured)
     except ValueError:
@@ -228,6 +255,29 @@ class SurveyHubExecution(BaseModel):
     completeness: SurveyHubCompleteness
 
 
+class SurveyHubOutput(BaseModel):
+    """Local output truncation, distinct from upstream pagination."""
+
+    max_bytes: int = Field(ge=2048)
+    max_string_chars: int = Field(ge=1)
+    received_count: int = Field(ge=0)
+    omitted_records: int = Field(ge=0)
+    truncated_fields: int = Field(ge=0)
+
+
+class SurveyHubPagination(BaseModel):
+    """Provider pagination controls; cursor values must be reused verbatim."""
+
+    offset: int | None = Field(default=None, ge=0)
+    total: int | None = Field(default=None, ge=0)
+    total_relation: Literal["eq", "gte", "unknown"] | None = None
+    has_more: bool | None = None
+    next_cursor: str | None = None
+    cursor_parameter: str | None = None
+    next_page: int | None = Field(default=None, ge=1)
+    next_offset: int | None = Field(default=None, ge=0)
+
+
 class SurveyHubMeta(BaseModel):
     """Execution metadata added by the MCP wrapper."""
 
@@ -235,6 +285,10 @@ class SurveyHubMeta(BaseModel):
 
     original_query: str | None = Field(default=None, description="Query supplied by the caller.")
     executed_query: str | None = Field(default=None, description="Query sent to the provider.")
+    metered: bool | None = Field(default=None, description="Whether the operation may consume provider quota; read-only does not mean free.")
+    range_verified: bool | None = Field(default=None, description="Whether the provider acknowledged the requested search range.")
+    offset_known: bool | None = Field(default=None, description="False when a continuation cursor's cumulative offset is unknown; never substitute zero.")
+    output: SurveyHubOutput | None = None
     attempts: int | None = Field(
         default=None,
         ge=0,
@@ -269,10 +323,11 @@ class SurveyHubResponse(BaseModel):
     download: SurveyHubDownload | None = Field(default=None, description="Local export metadata.")
     warnings: list[SurveyHubWarning] | None = Field(default=None, description="Non-fatal provider or wrapper warnings.")
     meta: SurveyHubMeta | None = Field(default=None, description="MCP execution metadata.")
+    pagination: SurveyHubPagination | None = Field(default=None, description="Normalized provider totals and continuation parameters.")
     returned_count: int = Field(default=0, ge=0, description="Number of records returned in this page when detectable.")
     truncated: bool = Field(default=False, description="Whether the result is known to be partial or has more pages.")
     completeness: Literal["complete", "partial", "unknown"] = Field(default="unknown", description="Whether the returned result is complete, partial, or unknown.")
-    next_action: Literal["stop", "call_next_page", "unknown"] = Field(default="unknown", description="Recommended continuation action; do not reconstruct results with a local script.")
+    next_action: Literal["stop", "call_next_page", "refine_query", "unknown"] = Field(default="unknown", description="Continuation guidance. refine_query means local output was clipped; advancing pages can skip omitted records.")
 
 
 StructuredToolResult = Annotated[CallToolResult, SurveyHubResponse]
@@ -282,86 +337,56 @@ def validated_payload(payload: dict[str, Any]) -> dict[str, Any]:
     """Validate and serialize the unified public response envelope."""
     enriched = dict(payload)
     returned = _count_result_records(enriched.get("data"))
-    execution = enriched.get("meta", {}).get("execution", {}) if isinstance(enriched.get("meta"), dict) else {}
-    execution_completeness = execution.get("completeness", {}) if isinstance(execution, dict) else {}
-    state = execution_completeness.get("state") if isinstance(execution_completeness, dict) else None
-    if state not in {"complete", "partial", "unknown"}:
-        state = "unknown"
-    # Promote provider pagination signals into the stable MCP envelope. This
-    # prevents the model from guessing whether another page is required.
-    # Transport success is not proof that a dataset is exhausted.
-    if state == "complete":
-        state = "unknown"
-    offset = enriched.get("meta", {}).get("result_offset", 0) if isinstance(enriched.get("meta"), dict) else 0
-    provider_has_more: bool | None = None
-    provider_total: int | None = None
-    for candidate in _pagination_mappings(enriched.get("data"), enriched.get("meta")):
-        if not isinstance(candidate, dict):
-            continue
-        for key in ("has_more", "hasMore", "has_next", "hasNextPage"):
-            if isinstance(candidate.get(key), bool):
-                provider_has_more = candidate[key]
-                break
-        for key in ("total", "total_count", "totalCount"):
-            if type(candidate.get(key)) is int and candidate[key] >= 0:
-                provider_total = candidate[key]
-                break
-    truncated = state == "partial" or provider_has_more is True or (
-        provider_total is not None and provider_total > offset + returned
-    )
-    if provider_has_more is False and not truncated:
-        state = "complete"
-    elif provider_total is not None and provider_total <= offset + returned and not truncated:
-        state = "complete"
-    elif truncated:
-        state = "partial"
+    meta = dict(enriched.get("meta") or {})
+    if "result_offset" in meta and meta["result_offset"] is None:
+        meta["offset_known"] = False
+    execution = dict(meta.get("execution") or {})
+    prior = execution.get("completeness") or {}
+    state = "partial" if prior.get("state") == "partial" else "unknown"
+    reason = prior.get("reason", "no_pagination_evidence")
+    # Wrapper-level envelopes carry no provider; label them like the other
+    # SurveyHub-owned errors instead of raising a bare KeyError that would
+    # surface as an opaque internal error.
+    platform = enriched.setdefault("platform", "SurveyHub")
+    pagination = pagination_info(platform, enriched.get("data"), meta, returned)
+    has_more = pagination.get("has_more")
+    if has_more is True:
+        state, reason = "partial", "provider_has_more_results"
+    elif has_more is False and state != "partial" and meta.get("range_verified") is not False:
+        state, reason = "complete", "provider_pagination_exhausted"
+    local_truncation = meta.get("output") is not None
+    if local_truncation:
+        state, reason = "partial", "local_output_budget"
+    truncated = state == "partial"
     failed = enriched.get("ok") is False
     if failed:
-        state, truncated = "unknown", False
+        state, truncated, reason = "unknown", False, "operation_failed"
+    if execution:
+        execution["completeness"] = {"state": state, "reason": reason}
+        meta["execution"] = execution
+    if meta:
+        enriched["meta"] = meta
+    if not failed and (record_container(enriched.get("data")) is not None or "next_cursor" in pagination):
+        enriched["pagination"] = pagination
+    elif failed:
+        enriched.pop("pagination", None)
     enriched.update(
         {
             "returned_count": returned,
             "truncated": truncated,
             "completeness": state,
-            "next_action": "stop" if failed else ("call_next_page" if truncated else ("stop" if state == "complete" else "unknown")),
+            "next_action": (
+                "stop" if failed else "refine_query" if local_truncation else
+                "call_next_page" if truncated else "stop" if has_more is False else "unknown"
+            ),
         }
     )
     return SurveyHubResponse.model_validate(enriched).model_dump(exclude_none=True)
 
 
-def _pagination_mappings(*values: Any) -> list[dict[str, Any]]:
-    """Return shallow/nested mappings that commonly carry page metadata."""
-    mappings: list[dict[str, Any]] = []
-    queue = [value for value in values if isinstance(value, dict)]
-    seen: set[int] = set()
-    while queue:
-        current = queue.pop(0)
-        marker = id(current)
-        if marker in seen:
-            continue
-        seen.add(marker)
-        mappings.append(current)
-        for key in ("data", "meta", "pagination", "page"):
-            child = current.get(key)
-            if isinstance(child, dict):
-                queue.append(child)
-    return mappings
-
-
 def _count_result_records(value: Any) -> int:
-    """Best-effort count for common provider result containers."""
-    if isinstance(value, list):
-        return len(value)
-    if isinstance(value, dict):
-        for key in ("results", "items", "records", "list", "data"):
-            child = value.get(key)
-            if isinstance(child, list):
-                return len(child)
-            if isinstance(child, dict):
-                count = _count_result_records(child)
-                if count:
-                    return count
-    return 0
+    container = record_container(value)
+    return len(container[0]) if container is not None else 0
 
 
 def enrich_payload(
@@ -379,12 +404,83 @@ def enrich_payload(
     return validated_payload(enriched)
 
 
+def _compact_output_schema(value: Any) -> Any:
+    """Remove documentation annotations without changing validation semantics."""
+    if isinstance(value, list):
+        return [_compact_output_schema(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    result = {}
+    for key, child in value.items():
+        if key in {"title", "description", "default", "examples"}:
+            continue
+        if key in {"properties", "$defs", "patternProperties", "dependentSchemas"}:
+            # These are name-to-schema maps: a property named 'description'
+            # must survive even though that annotation on a schema does not.
+            result[key] = {name: _compact_output_schema(schema) for name, schema in child.items()}
+        else:
+            result[key] = _compact_output_schema(child)
+    return result
+
+
+def _tool_platform(name: str) -> str:
+    for prefix, platform in (
+        ("fofa_", "FOFA"), ("quake_", "Quake"),
+        ("hunter_personal_", "Hunter Personal"), ("hunter_enterprise_", "Hunter Enterprise"),
+        ("zoomeye_", "ZoomEye"), ("daydaymap_", "DayDayMap"),
+    ):
+        if name.startswith(prefix):
+            return platform
+    return "SurveyHub"
+
+
 class SurveyHubMCPServer(MCPServer):
     """MCP server that advertises the unified Pydantic output contract."""
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
+        kwargs["cache_hints"] = {**DEFAULT_CACHE_HINTS, **(kwargs.get("cache_hints") or {})}
+        kwargs.setdefault("website_url", "https://github.com/helGayhub233/SurveyHub-MCP")
         super().__init__(*args, **kwargs)
         self.middleware.append(_execution_context_middleware)
+
+        _capabilities = type(self._lowlevel_server).get_capabilities
+
+        def get_capabilities(
+            server: Any,
+            notification_options: Any = None,
+            experimental_capabilities: Any = None,
+            extensions: Any = None,
+            *,
+            protocol_version: str | None = None,
+        ) -> Any:
+            """Drop deprecated capabilities that the SDK still derives from handlers.
+
+            SDK 2.3 advertises `logging` whenever a `logging/setLevel` handler is
+            registered, but that method is legacy-only (SEP-2577): the modern
+            `server/discover` result must not offer it. Overriding the single
+            capability builder keeps both eras correct without patching a
+            serialized discover payload.
+            """
+            capabilities = _capabilities(
+                server, notification_options, experimental_capabilities, extensions,
+                protocol_version=protocol_version,
+            )
+            if protocol_version in MODERN_PROTOCOL_VERSIONS:
+                return capabilities.model_copy(update={"logging": None})
+            return capabilities
+
+        # Instance attribute shadows the bound method on the low-level server.
+        self._lowlevel_server.get_capabilities = get_capabilities.__get__(self._lowlevel_server)
+
+        @self.resource(
+            RESPONSE_SCHEMA_URI,
+            name="response-schema",
+            title="SurveyHub Response Schema",
+            description="Full SurveyHubResponse JSON Schema with field documentation for every tool.",
+            mime_type="application/schema+json",
+        )
+        def response_schema() -> str:
+            return render_json(SurveyHubResponse.model_json_schema(mode="serialization"))
 
         async def set_logging_level(context: Any, params: SetLevelRequestParams) -> EmptyResult:
             connection = _connection_for(context)
@@ -393,17 +489,83 @@ class SurveyHubMCPServer(MCPServer):
             return EmptyResult()
 
         # MCPServer has no high-level decorator for the legacy logging method.
-        # Registering this typed handler also advertises logging capability.
+        # Modern discovery removes the deprecated capability; legacy peers
+        # retain their connection-level logging/setLevel support.
         self._lowlevel_server.add_request_handler(
             "logging/setLevel",
             SetLevelRequestParams,
             set_logging_level,
         )
 
+    async def call_tool(
+        self, name: str, arguments: dict[str, Any], context: Any = None
+    ) -> Any:
+        """Normalize SDK failures before its handler falls back to plain text."""
+        schema = self._tool_input_schema(name)
+        if schema is None:
+            return mcp_tool_result(error_payload(
+                platform="SurveyHub", error_type="tool_not_found",
+                message="Unknown tool. Use tools/list to select an available tool.",
+                details={"tool": name},
+            ))
+        extra = sorted(arguments.keys() - schema.get("properties", {}).keys())
+        if extra:
+            return self._validation_result(name, [
+                {"loc": [field], "type": "extra_forbidden", "message": "Extra inputs are not permitted"}
+                for field in extra
+            ])
+        try:
+            return await super().call_tool(name, arguments, context)
+        except MCPError:
+            # Preserve protocol errors, including version and negotiation errors.
+            raise
+        except ToolError as error:
+            if isinstance(error, UnexpectedToolError):
+                _LOGGER.exception("Tool %r raised an unexpected exception", name)
+                return mcp_tool_result(error_payload(
+                    platform=_tool_platform(name), error_type="internal_error",
+                    message="Tool execution failed unexpectedly. Inspect the server logs before retrying.",
+                    details={"tool": name},
+                ))
+            if isinstance(error.__cause__, ValidationError):
+                errors = error.__cause__.errors(include_input=False, include_context=False, include_url=False)
+                return self._validation_result(name, [
+                    {"loc": list(item["loc"]), "type": item["type"], "message": item["msg"]}
+                    for item in errors
+                ])
+            return mcp_tool_result(error_payload(
+                platform=_tool_platform(name), error_type="tool_error",
+                message=str(error), details={"tool": name},
+            ))
+
+    @staticmethod
+    def _validation_result(name: str, errors: list[dict[str, Any]]) -> CallToolResult:
+        return mcp_tool_result(error_payload(
+            platform=_tool_platform(name), error_type="validation_error",
+            message="Invalid tool arguments. Correct the listed fields using tools/list before retrying.",
+            details={"tool": name, "validation_errors": errors},
+        ))
+
     async def list_tools(self):
         tools = await super().list_tools()
-        output_schema = SurveyHubResponse.model_json_schema(mode="serialization")
-        return [tool.model_copy(update={"output_schema": output_schema}) for tool in tools]
+        output_schema = _compact_output_schema(SurveyHubResponse.model_json_schema(mode="serialization"))
+        output_schema["title"] = "SurveyHubResponse"
+        output_schema["description"] = f"Unified response envelope. Full field documentation: {RESPONSE_SCHEMA_URI}"
+        result = []
+        for tool in sorted(tools, key=lambda item: item.name):
+            input_schema = dict(tool.input_schema)
+            input_schema["additionalProperties"] = False
+            pair = ("query", "qbase64") if tool.name == "zoomeye_search" else (
+                ("query", "file_path") if tool.name in {"hunter_personal_batch_create", "hunter_enterprise_batch_create"} else None
+            )
+            if pair:
+                first, second = pair
+                input_schema["oneOf"] = [
+                    {"required": [first], "properties": {first: {"type": "string", "minLength": 1}, second: {"type": "null"}}},
+                    {"required": [second], "properties": {second: {"type": "string", "minLength": 1}, first: {"type": "null"}}},
+                ]
+            result.append(tool.model_copy(update={"input_schema": input_schema, "output_schema": output_schema}))
+        return result
 
 
 @dataclass(frozen=True)
@@ -444,13 +606,16 @@ class AsyncRateLimiter:
         policy: RateLimitPolicy = DEFAULT_RATE_LIMIT_POLICY,
         namespace: str | None = None,
         identity_provider: Callable[[], str | None] | None = None,
+        shared_intervals: dict[str, float] | None = None,
     ) -> None:
         self._min_interval = min_interval
         self._policy = policy
         self._last_started_at = 0.0
         self._cooldown_until = 0.0
         self._condition = asyncio.Condition()
-        self._coordinator = SQLiteRateLimitCoordinator(namespace, policy=policy) if namespace else None
+        self._coordinator = SQLiteRateLimitCoordinator(
+            namespace, policy=policy, shared_intervals=shared_intervals
+        ) if namespace else None
         self._identity_provider = identity_provider
 
     async def wait(self) -> None:
@@ -479,12 +644,16 @@ class AsyncRateLimiter:
 
         identity = self._identity_provider() if self._identity_provider else None
         if self._coordinator and identity:
+            shared_deadline = time.monotonic() + self._policy.queue_timeout
             while True:
+                remaining = shared_deadline - time.monotonic()
+                if remaining <= 0:
+                    raise RateLimitQueueTimeout(self._policy.queue_timeout)
                 delay = await asyncio.to_thread(
                     self._coordinator.reserve,
                     identity,
                     self._min_interval,
-                    self._policy.queue_timeout,
+                    remaining,
                 )
                 if delay > self._policy.max_inline_cooldown:
                     raise ProviderCooldownActive(delay)
@@ -532,43 +701,49 @@ class SQLiteRateLimitCoordinator:
         state_dir: Path | None = None,
         *,
         policy: RateLimitPolicy = DEFAULT_RATE_LIMIT_POLICY,
+        shared_intervals: dict[str, float] | None = None,
     ) -> None:
         self._namespace = namespace
         self._state_dir = state_dir or _rate_limit_state_dir()
         self._database_path = self._state_dir / "rate-limits.sqlite3"
         self._policy = policy
+        self._shared_intervals = dict(shared_intervals or {})
 
     def reserve(self, identity: str, min_interval: float, queue_timeout: float) -> float:
         now = time.time()
 
-        def update(state: tuple[float, float] | None) -> tuple[float, float, float]:
-            next_allowed_at, cooldown_until = state or (0.0, 0.0)
-            cooldown_until = _bounded_timestamp(cooldown_until, now, self._policy)
-            next_allowed_at = _bounded_timestamp(next_allowed_at, now, self._policy)
-            reserved_at = max(now, cooldown_until, next_allowed_at)
+        intervals = {**self._shared_intervals, self._namespace: min_interval}
+
+        def update(states: dict[str, tuple[float, float]]) -> tuple[dict[str, tuple[float, float]], float]:
+            bounded = {
+                name: tuple(_bounded_timestamp(value, now, self._policy) for value in state)
+                for name, state in states.items()
+            }
+            cooldown_until = max(state[1] for state in bounded.values())
+            reserved_at = max(now, *(max(state) for state in bounded.values()))
             delay = reserved_at - now
             cooldown_delay = max(0.0, cooldown_until - now)
             if delay > cooldown_delay + queue_timeout:
                 raise RateLimitQueueTimeout(queue_timeout)
             if delay > 0:
-                return next_allowed_at, cooldown_until, delay
-            return now + min_interval, cooldown_until, 0.0
+                return bounded, delay
+            return {name: (now + interval, bounded[name][1]) for name, interval in intervals.items()}, 0.0
 
-        return self._update(identity, update)
+        return self._update(identity, list(intervals), update)
 
     def defer(self, identity: str, delay: float) -> None:
         now = time.time()
         bounded_delay = min(self._policy.max_provider_cooldown, max(0.0, delay))
 
-        def update(state: tuple[float, float] | None) -> tuple[float, float, None]:
-            next_allowed_at, cooldown_until = state or (0.0, 0.0)
-            return (
-                _bounded_timestamp(next_allowed_at, now, self._policy),
-                max(_bounded_timestamp(cooldown_until, now, self._policy), now + bounded_delay),
-                None,
-            )
+        def update(states: dict[str, tuple[float, float]]) -> tuple[dict[str, tuple[float, float]], None]:
+            return {
+                name: (
+                    _bounded_timestamp(state[0], now, self._policy),
+                    max(_bounded_timestamp(state[1], now, self._policy), now + bounded_delay),
+                ) for name, state in states.items()
+            }, None
 
-        self._update(identity, update)
+        self._update(identity, [self._namespace, *self._shared_intervals], update)
 
     @property
     def database_path(self) -> Path:
@@ -580,7 +755,8 @@ class SQLiteRateLimitCoordinator:
     def _update(
         self,
         identity: str,
-        updater: Callable[[tuple[float, float] | None], tuple[float, float, Any]],
+        namespaces: list[str],
+        updater: Callable[[dict[str, tuple[float, float]]], tuple[dict[str, tuple[float, float]], Any]],
     ) -> Any:
         # POSIX 0700 intentionally restricts the state directory to its owner.
         self._state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)  # nosemgrep: python.lang.security.audit.insecure-file-permissions.insecure-file-permissions
@@ -588,7 +764,7 @@ class SQLiteRateLimitCoordinator:
         database_descriptor = os.open(self._database_path, os.O_CREAT | os.O_RDWR, 0o600)
         os.close(database_descriptor)
         key_hash = self.identity_hash(identity)
-        with sqlite3.connect(self._database_path, timeout=5.0, isolation_level=None) as connection:
+        with closing(sqlite3.connect(self._database_path, timeout=5.0, isolation_level=None)) as connection:
             connection.execute("PRAGMA busy_timeout = 5000")
             connection.execute(
                 """
@@ -603,27 +779,27 @@ class SQLiteRateLimitCoordinator:
                 """
             )
             connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute(
-                """
-                SELECT next_allowed_at, cooldown_until
-                FROM rate_limit_state
-                WHERE namespace = ? AND identity_hash = ?
-                """,
-                (self._namespace, key_hash),
-            ).fetchone()
-            next_allowed_at, cooldown_until, result = updater(row)
-            connection.execute(
-                """
-                INSERT INTO rate_limit_state (
-                    namespace, identity_hash, next_allowed_at, cooldown_until, updated_at
-                ) VALUES (?, ?, ?, ?, ?)
-                ON CONFLICT(namespace, identity_hash) DO UPDATE SET
-                    next_allowed_at = excluded.next_allowed_at,
-                    cooldown_until = excluded.cooldown_until,
-                    updated_at = excluded.updated_at
-                """,
-                (self._namespace, key_hash, next_allowed_at, cooldown_until, time.time()),
-            )
+            states = {}
+            for namespace in namespaces:
+                row = connection.execute(
+                    "SELECT next_allowed_at, cooldown_until FROM rate_limit_state WHERE namespace = ? AND identity_hash = ?",
+                    (namespace, key_hash),
+                ).fetchone()
+                states[namespace] = row or (0.0, 0.0)
+            updated, result = updater(states)
+            for namespace, (next_allowed_at, cooldown_until) in updated.items():
+                connection.execute(
+                    """
+                    INSERT INTO rate_limit_state (
+                        namespace, identity_hash, next_allowed_at, cooldown_until, updated_at
+                    ) VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(namespace, identity_hash) DO UPDATE SET
+                        next_allowed_at = excluded.next_allowed_at,
+                        cooldown_until = excluded.cooldown_until,
+                        updated_at = excluded.updated_at
+                    """,
+                    (namespace, key_hash, next_allowed_at, cooldown_until, time.time()),
+                )
             connection.execute(
                 "DELETE FROM rate_limit_state WHERE updated_at < ?",
                 (time.time() - 86400.0,),
@@ -927,9 +1103,12 @@ def render_json(data: Any) -> str:
     return json.dumps(data, indent=2, ensure_ascii=False)
 
 
-def mcp_tool_result(payload: dict[str, Any]) -> CallToolResult:
+def mcp_tool_result(
+    payload: dict[str, Any], *, output_policy: OutputPolicy = DEFAULT_OUTPUT_POLICY
+) -> CallToolResult:
     """Convert a platform payload into a spec-compliant MCP tool result."""
-    payload = validated_payload(payload)
+    payload = bounded_payload(validated_payload(payload), output_policy)
+    payload = SurveyHubResponse.model_validate(payload).model_dump(exclude_none=True)
     return CallToolResult(
         content=[TextContent(type="text", text=render_json(payload))],
         structured_content=payload,
@@ -937,16 +1116,26 @@ def mcp_tool_result(payload: dict[str, Any]) -> CallToolResult:
     )
 
 
-def response_payload(*, platform: str, response: httpx.Response, attempts: int = 1) -> dict[str, Any]:
+def response_payload(
+    *, platform: str, response: httpx.Response, attempts: int = 1, allow_text: bool = False,
+) -> dict[str, Any]:
     """Return an MCP-friendly structured payload for successful HTTP responses."""
     if not response.content:
+        if platform == "FOFA" or platform in SUCCESS_CODES:
+            return error_payload(platform=platform, message="Provider returned an empty response; execution and quota use are unknown.", error_type="invalid_response")
         return validated_payload({"ok": True, "platform": platform, "data": None, "meta": {"attempts": attempts}})
 
     try:
+        body = response.json()
+        error = provider_error(platform, body)
+        if error is not None:
+            return validated_payload({"ok": False, "platform": platform, "error": error, "meta": {"attempts": attempts}})
         return validated_payload(
-            {"ok": True, "platform": platform, "data": response.json(), "meta": {"attempts": attempts}}
+            {"ok": True, "platform": platform, "data": body, "meta": {"attempts": attempts}}
         )
     except ValueError:
+        if not allow_text and (platform == "FOFA" or platform in SUCCESS_CODES):
+            return error_payload(platform=platform, message="Provider returned invalid JSON; execution and quota use are unknown. Check provider status before replaying the request.", error_type="invalid_response")
         return validated_payload(
             {"ok": True, "platform": platform, "text": response.text, "meta": {"attempts": attempts}}
         )
@@ -1176,12 +1365,7 @@ def _retry_backoff_delay(
 def _response_code(body: Any) -> int | None:
     if not isinstance(body, dict):
         return None
-    code = body.get("code")
-    if isinstance(code, int):
-        return code
-    if isinstance(code, str) and code.strip().isdigit():
-        return int(code)
-    return None
+    return integer_code(body.get("code"))
 
 
 def _can_retry_method(method: str, retry_non_idempotent: bool) -> bool:
@@ -1228,7 +1412,8 @@ def _execution_receipt(
         "retry": {"safety": retry_safety, "recommended": retry_recommended, "reason": reason},
         "quota": {
             "risk": quota_risk,
-            "charged_attempts": attempts if final_state == "confirmed_success" and transport_state == "response_received" else "unknown",
+            # HTTP attempts do not prove that the provider charged the account.
+            "charged_attempts": 0 if attempts == 0 or transport_state == "not_sent" else "unknown",
         },
         "completeness": {"state": completeness, "reason": reason},
         "cache_hit": cache_hit,
@@ -1248,21 +1433,41 @@ def _safe_fingerprint_value(value: Any) -> Any:
         return {
             str(key): _safe_fingerprint_value(item)
             for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
-            if str(key).lower() not in {"key", "email", "authorization", "x-quaketoken", "api-key", "apikey"}
+            if str(key).lower() not in {"key", "email", "authorization", "x-quaketoken", "api-key", "apikey", "api_key", "x-api-key"}
         }
     if isinstance(value, (list, tuple)):
         return [_safe_fingerprint_value(item) for item in value]
+    if isinstance(value, io.IOBase) and value.seekable():
+        position = value.tell()
+        digest = hashlib.sha256()
+        try:
+            value.seek(0)
+            while chunk := value.read(65536):
+                digest.update(chunk.encode("utf-8") if isinstance(chunk, str) else chunk)
+        finally:
+            value.seek(position)
+        return {"content_sha256": digest.hexdigest()}
+    if isinstance(value, bytes):
+        return {"content_sha256": hashlib.sha256(value).hexdigest()}
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
     return type(value).__name__
 
 
 def request_fingerprint(platform: str, method: str, url: str, request_kwargs: dict[str, Any]) -> str:
+    credentials = {}
+    for section in ("headers", "params", "json"):
+        values = request_kwargs.get(section)
+        if isinstance(values, dict):
+            for key, value in values.items():
+                if str(key).lower() in {"key", "authorization", "x-quaketoken", "api-key", "apikey", "api_key", "x-api-key"}:
+                    credentials[f"{section}.{str(key).lower()}"] = str(value)
     identity = {
         "platform": platform,
         "method": method.upper(),
         "url": url,
         "request": _safe_fingerprint_value(request_kwargs),
+        "credential_identity": hashlib.sha256(json.dumps(credentials, sort_keys=True).encode()).hexdigest(),
     }
     canonical = json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -1469,14 +1674,14 @@ async def request_json(
                     "execution": _execution_receipt(
                         request_id=request_id,
                         fingerprint=fingerprint,
-                        final_state="confirmed_success" if duplicate["state"] == "completed" else "indeterminate",
-                        transport_state="response_received" if duplicate["state"] == "completed" else "possibly_sent",
+                        final_state="confirmed_failure" if duplicate["state"] == "completed" else "indeterminate",
+                        transport_state="not_sent" if duplicate["state"] == "completed" else "possibly_sent",
                         attempts=0,
                         retry_safety="unsafe",
                         retry_recommended=False,
                         reason=reason,
                         quota_risk="possible_duplicate" if duplicate["state"] != "completed" else "none",
-                        completeness="complete" if duplicate["state"] == "completed" else "unknown",
+                        completeness="unknown",
                         duplicate_of=duplicate["request_id"],
                     )
                 },
@@ -1484,6 +1689,9 @@ async def request_json(
 
     request_dispatched = False
     response_received = False
+    provider_confirmed_success = False
+    provider_outcome_unknown = False
+    dispatched_attempts = 0
     for attempt in range(http_policy.max_attempts):
         try:
             request_dispatched = accumulated_quota_risk != "none"
@@ -1500,6 +1708,7 @@ async def request_json(
             attempt_timeout = min(http_policy.attempt_timeout, _remaining_budget(deadline))
             async with httpx.AsyncClient(timeout=attempt_timeout) as client:
                 request_dispatched = True
+                dispatched_attempts += 1
                 response = await asyncio.wait_for(
                     client.request(method, url, **kwargs),
                     timeout=_remaining_budget(deadline),
@@ -1523,56 +1732,74 @@ async def request_json(
                             delay_seconds=delay,
                             reason="provider_rate_limit_response",
                         )
-                        await _publish_retry_delay(rate_limiter, delay, deadline=deadline)
-                        if attempt + 1 < http_policy.max_attempts and retry_mode != "never":
+                        if (
+                            attempt + 1 < http_policy.max_attempts and retry_mode == "aggressive"
+                            and _can_retry_method(method, retry_non_idempotent)
+                        ):
+                            await _publish_retry_delay(rate_limiter, delay, deadline=deadline)
                             accumulated_quota_risk = "unknown"
                             continue
+                        if rate_limiter:
+                            await rate_limiter.defer(delay)
                         await circuit_breaker.record_neutral()
                         if ledger and fingerprint:
-                            await asyncio.to_thread(ledger.finish, fingerprint, request_id, "completed")
+                            await asyncio.to_thread(ledger.finish, fingerprint, request_id, "failed")
                         return enrich_payload(
                             error_payload(
                                 platform=platform,
                                 message=str(body.get("message") or f"{platform} API rate limit exceeded."),
                                 error_type="rate_limit",
                                 status_code=int(body_code),
-                                details={"provider_response": body},
+                                details={"provider_code": body_code, "retry_after_seconds": delay},
                             ),
-                            meta={"execution": _execution_receipt(
+                            meta={"attempts": attempt + 1, "metered": True if metered_request else None, "execution": _execution_receipt(
                                 request_id=request_id, fingerprint=fingerprint,
                                 final_state="confirmed_failure", transport_state="response_received",
                                 attempts=attempt + 1, retry_safety="conditional", retry_recommended=True,
                                 reason="provider_rate_limit_response", quota_risk="unknown", completeness="unknown",
                             )},
                         )
-                await circuit_breaker.record_success()
                 request_data = kwargs.get("json") or kwargs.get("params") or {}
                 page_size = next((request_data[k] for k in ("size", "page_size", "pagesize", "limit") if type(request_data.get(k)) is int), 0)
                 result_offset = request_data.get("start", request_data.get("offset", (request_data.get("page", 1) - 1) * page_size))
+                cursor_mode = "/scroll/" in url or url.endswith("/search/next")
+                if cursor_mode and (request_data.get("next") or request_data.get("pagination_id")):
+                    result_offset = None
+                provider_result = response_payload(
+                    platform=platform, response=response, attempts=attempt + 1,
+                    allow_text=platform == "FOFA" and request_data.get("r_type", "json") != "json",
+                )
+                provider_confirmed_success = provider_result["ok"]
+                provider_outcome_unknown = provider_result.get("error", {}).get("type") == "invalid_response"
+                await circuit_breaker.record_success()
                 success_result = enrich_payload(
-                    response_payload(platform=platform, response=response, attempts=attempt + 1),
+                    provider_result,
                     meta={
                         "result_offset": result_offset,
+                        "page": request_data.get("page"),
+                        "pagination_mode": "cursor" if cursor_mode else "offset" if "start" in request_data else "page",
+                        "metered": True if metered_request else None,
                         "execution": _execution_receipt(
                             request_id=request_id,
                             fingerprint=fingerprint,
-                            final_state="confirmed_success",
+                            final_state="confirmed_success" if provider_confirmed_success else "indeterminate" if provider_outcome_unknown else "confirmed_failure",
                             transport_state="response_received",
                             attempts=attempt + 1,
-                            retry_safety="safe",
+                            retry_safety="unsafe" if provider_outcome_unknown else "safe",
                             retry_recommended=False,
-                            reason="provider_response_received",
-                            quota_risk=accumulated_quota_risk,
-                            completeness="complete",
+                            reason="provider_response_received" if provider_confirmed_success else "provider_business_error",
+                            quota_risk="unknown" if provider_outcome_unknown else accumulated_quota_risk,
+                            completeness="unknown",
                         )
                     },
                 )
                 if ledger and fingerprint:
-                    await asyncio.to_thread(ledger.finish, fingerprint, request_id, "completed")
-                    _METERED_RESPONSE_CACHE[fingerprint] = (time.monotonic(), success_result)
+                    await asyncio.to_thread(ledger.finish, fingerprint, request_id, "completed" if provider_confirmed_success else "indeterminate" if provider_outcome_unknown else "failed")
+                    if provider_confirmed_success:
+                        _METERED_RESPONSE_CACHE[fingerprint] = (time.monotonic(), success_result)
                 await reporter.event(
-                    "request_completed",
-                    f"Received and validated the {platform} provider response.",
+                    "request_completed" if provider_confirmed_success else "request_failed",
+                    f"Received and validated the {platform} provider response." if provider_confirmed_success else f"{platform} rejected the operation in its response body.",
                     attempt=attempt + 1,
                     attempts=attempt + 1,
                 )
@@ -1584,7 +1811,7 @@ async def request_json(
                         ledger.finish,
                         fingerprint,
                         request_id,
-                        "completed" if response_received else ("indeterminate" if request_dispatched else "failed"),
+                        "completed" if provider_confirmed_success else "indeterminate" if provider_outcome_unknown else "failed" if response_received else ("indeterminate" if request_dispatched else "failed"),
                     )
                 )
             await asyncio.shield(
@@ -1613,10 +1840,15 @@ async def request_json(
                     delay_seconds=delay,
                     reason="http_429",
                 )
-                await _publish_retry_delay(rate_limiter, delay, deadline=deadline)
-                if attempt + 1 < http_policy.max_attempts and retry_mode != "never":
+                if (
+                    attempt + 1 < http_policy.max_attempts and retry_mode == "aggressive"
+                    and _can_retry_method(method, retry_non_idempotent)
+                ):
+                    await _publish_retry_delay(rate_limiter, delay, deadline=deadline)
                     accumulated_quota_risk = "unknown"
                     continue
+                if rate_limiter:
+                    await rate_limiter.defer(delay)
             if error.response.status_code == 429:
                 await circuit_breaker.record_neutral()
             elif _should_trip_circuit(error):
@@ -1624,9 +1856,9 @@ async def request_json(
             else:
                 await circuit_breaker.record_success()
             if ledger and fingerprint:
-                await asyncio.to_thread(ledger.finish, fingerprint, request_id, "completed")
+                await asyncio.to_thread(ledger.finish, fingerprint, request_id, "failed")
             await reporter.event(
-                "request_failed",
+                    "request_failed",
                 f"{platform} returned HTTP {error.response.status_code}.",
                 level="warning",
                 attempt=attempt + 1,
@@ -1720,14 +1952,14 @@ async def request_json(
             )
         except (asyncio.TimeoutError, TotalRequestTimeout):
             if ledger and fingerprint:
-                await asyncio.to_thread(ledger.finish, fingerprint, request_id, "indeterminate")
+                await asyncio.to_thread(ledger.finish, fingerprint, request_id, "indeterminate" if request_dispatched else "failed")
             await reporter.event(
                 "total_timeout",
                 f"{platform} exhausted its total request time budget.",
                 level="error",
                 attempt=attempt + 1,
                 total_timeout_seconds=http_policy.total_timeout,
-                transport_state="possibly_sent",
+                transport_state="possibly_sent" if request_dispatched else "not_sent",
             )
             return enrich_payload(
                 error_payload(
@@ -1736,11 +1968,13 @@ async def request_json(
                     error_type="total_timeout",
                     details={"total_timeout_seconds": http_policy.total_timeout},
                 ),
-                meta={"attempts": attempt + 1, "execution": _execution_receipt(
+                meta={"attempts": dispatched_attempts, "execution": _execution_receipt(
                     request_id=request_id, fingerprint=fingerprint,
-                    final_state="indeterminate", transport_state="possibly_sent", attempts=attempt + 1,
-                    retry_safety="unsafe", retry_recommended=False, reason="total_budget_exhausted_execution_unknown",
-                    quota_risk="possible_duplicate", completeness="unknown", phase="unknown",
+                    final_state="indeterminate" if request_dispatched else "confirmed_failure",
+                    transport_state="possibly_sent" if request_dispatched else "not_sent", attempts=dispatched_attempts,
+                    retry_safety="unsafe" if request_dispatched else "safe", retry_recommended=not request_dispatched,
+                    reason="total_budget_exhausted_execution_unknown" if request_dispatched else "total_budget_exhausted_before_send",
+                    quota_risk="possible_duplicate" if request_dispatched else "none", completeness="unknown", phase="unknown",
                 )},
             )
         except RateLimitQueueTimeout as error:
@@ -1851,12 +2085,32 @@ async def request_json(
             )
 
 
+def _atomic_write_bytes(path: Path, content: bytes, *, overwrite: bool) -> None:
+    """Write beside the destination, then commit without a partial-file window."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False) as stream:
+            temporary = Path(stream.name)
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        if overwrite:
+            os.replace(temporary, path)
+        else:
+            os.link(temporary, path)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
 async def request_download(
     *,
     platform: str,
     method: str,
     url: str,
     output_path: str,
+    overwrite: bool = False,
     auth_hint: str,
     forbidden_hint: str,
     rate_limiter: AsyncRateLimiter | None = None,
@@ -1868,6 +2122,12 @@ async def request_download(
 
     Automatically retries GET timeouts and HTTP 429 responses with exponential backoff.
     """
+    path = Path(output_path).expanduser().absolute()
+    if path.exists() and not overwrite:
+        return error_payload(
+            platform=platform, message="Output file already exists. Choose a new output_path or explicitly set overwrite=true.",
+            error_type="file_exists", details={"path": str(path)},
+        )
     request_id = str(uuid.uuid4())
     reporter = ExecutionReporter(platform=platform, request_id=request_id)
     circuit_breaker = _circuit_breaker_for(platform)
@@ -1935,11 +2195,27 @@ async def request_download(
                             details={"provider_response": body},
                         )
                     await circuit_breaker.record_success()
-                    return response_payload(platform=platform, response=response, attempts=attempt + 1)
+                    result = response_payload(platform=platform, response=response, attempts=attempt + 1)
+                    if not result["ok"]:
+                        return result
+                    return error_payload(
+                        platform=platform,
+                        message="Provider returned JSON instead of an export file. Check the batch status before downloading again; no file was written.",
+                        error_type="download_not_ready",
+                    )
 
-                path = Path(output_path).expanduser()
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(response.content)
+                try:
+                    _atomic_write_bytes(path, response.content, overwrite=overwrite)
+                except FileExistsError:
+                    return error_payload(
+                        platform=platform, message="Output file appeared before commit. Choose a new output_path or explicitly set overwrite=true.",
+                        error_type="file_exists", details={"path": str(path)},
+                    )
+                except OSError as error:
+                    return error_payload(
+                        platform=platform, message=f"Unable to save export: {error}. Existing output was preserved.",
+                        error_type="file_write_error", details={"path": str(path)},
+                    )
                 await circuit_breaker.record_success()
                 await reporter.event(
                     "download_completed",

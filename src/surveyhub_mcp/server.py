@@ -15,35 +15,28 @@ from .reference import register_reference_prompts, register_reference_resources
 from .zoomeye import register_zoomeye_tools
 
 SERVER_INSTRUCTIONS = (
-    "This server exposes cyberspace asset search tools for FOFA, 360 Quake, "
-    "the configured Hunter account edition, ZoomEye APIs, and DayDayMap APIs. "
-    "Use the platform- and account-specific tool that matches the user's target data source. "
-    "Never collapse Hunter Personal and Hunter Enterprise into a generic Hunter availability result. "
-    "All search and aggregation calls are single-call bounded reads: use the returned "
-    "returned_count/completeness/next_action fields, keep one page per tool call, and do not "
-    "fan out pages or create a local script unless the user explicitly requests an exhaustive export."
+    "Cyberspace asset search: FOFA, 360 Quake, Hunter Personal/Enterprise, ZoomEye, DayDayMap. "
+    "Use the connected server's tools/list as the current tool and schema catalog. "
+    "Select the matching platform/account tool; keep Hunter editions distinct. "
+    "Use returned_count/completeness/next_action and pagination's reusable cursors. "
+    "next_action=refine_query and meta.output mean local clipping: narrow fields or page size "
+    "before continuing; repeat calls may consume quota. Full response field documentation: "
+    "surveyhub://reference/response-schema."
 )
 
 _ASSET_CORRELATION_FORMULA = (
     "Official asset-correlation formula: ICP unit name <-> domain <-> IP <-> "
-    "certificate fingerprint <-> icon hash. Classify the user's single target as one "
-    "of those nodes, seed every configured platform with its native query syntax, and "
-    "traverse the formula in both directions. Platform node support: FOFA domain, IP, "
-    "ICP number, certificate text/subject, icon hash; Quake domain, IP, ICP number, "
-    "certificate SHA256/SPKI, favicon MD5; Hunter domain, IP, ICP unit name/number, "
-    "certificate SHA256, icon query; ZoomEye domain, IP, ICP unit name/number, "
-    "certificate fingerprint, icon hash; DayDayMap domain, IP, ICP unit name/number, "
-    "certificate MD5, icon. When a source cannot seed the supplied node, derive a "
-    "supported sibling node from another configured source first (for example, ICP "
-    "unit name -> domain or ICP number), then query that source."
+    "certificate fingerprint <-> icon hash. Classify the user's single target as a domain, "
+    "IP/CIDR, ICP unit name, certificate fingerprint, or icon hash and traverse both directions. "
+    "Platform node support follows the formulas below. FOFA cert searches text/subject; "
+    "Quake supports certificate SHA256/SPKI and favicon MD5; Hunter supports SHA256; "
+    "ZoomEye supports fingerprints; DayDayMap queries certificate MD5 (SHA256 is output-only). "
+    "For an unsupported seed, derive a supported sibling from another configured source first."
 )
 
 _MVP_TARGET_DISCOVERY_INSTRUCTIONS = (
-    "MVP target discovery: infer whether the single user target is a domain, IP/CIDR, "
-    "ICP unit name, certificate fingerprint, or icon hash. Query every configured "
-    "credential source in one batch when the MCP client supports parallel calls; if a "
-    "source cannot query that node directly, first derive a supported sibling node from "
-    "another source, then query it. Unless the user explicitly requests another range, "
+    "MVP target discovery: Query every configured credential source in one batch when "
+    "the client supports parallel calls. Unless the user requests another range, "
     "restrict discovery to assets updated in the last 1 year: FOFA keeps full=false; "
     "Quake sets start_time to one year ago (UTC); Hunter sets start_time/end_time; "
     "ZoomEye appends after=\"YYYY-MM-DD\"; DayDayMap appends time>\"YYYY-MM-DD\". "
@@ -51,36 +44,36 @@ _MVP_TARGET_DISCOVERY_INSTRUCTIONS = (
     "domain:, ip:, icp:, favicon:, cert:, tls_sha256:, tls_SPKI:; Hunter domain=, ip=, "
     "icp.name=, icp.number=, web.icon=, cert.sha-256=; ZoomEye domain=, ip=, cidr=, "
     "icp.name=, icp.number=, iconhash=, ssl.cert.fingerprint=; DayDayMap domain=, ip=, "
-    "icp.name=, icp.number=, web.icon=, cert.md5=, cert.subject.cn=. Icon hash is a "
-    "supplemental pivot, not proof of ownership: mark an icon observed on the target's "
-    "canonical official homepage as official_icon_hash (higher confidence), and a "
-    "provider-derived or non-official-page icon as vendor_icon_hash (lower confidence; "
-    "generic shared icons are lowest). Do not merge or discard relationships solely on "
-    "icon-hash equality. After all source queries, normalize and deduplicate the "
-    "relationship graph by node type and value (lowercase domains, canonical IPs, "
-    "certificate fingerprint algorithm plus hash, icon hash plus provenance), union "
-    "source evidence, then return one final asset and relationship result with source "
-    "coverage gaps."
+    "icp.name=, icp.number=, web.icon=, cert.md5=, cert.subject.cn=. Icon hash is "
+    "supplemental evidence: official_icon_hash comes from the target's canonical homepage; "
+    "vendor_icon_hash comes from a provider or other page and has lower confidence "
+    "(generic shared icons lowest). Icon equality alone must not merge or discard relationships. "
+    "Normalize and deduplicate the relationship graph by node type/value: lowercase domains, "
+    "canonical IPs, certificate algorithm+hash, icon hash+provenance. Union source evidence "
+    "and return one asset/relationship result with source coverage gaps."
 )
 
 _ASSET_PIVOT_INSTRUCTIONS = (
-    "Multi-source discovery workflow. When the user asks to map an organization's "
-    "or target's assets without naming a tool: (1) identify the configured platforms "
-    "from the runtime configuration below; (2) before the first metered search on each "
-    "platform whose quota is unknown, call its user_info tool to verify remaining quota "
-    "(DayDayMap exposes no user_info tool; insufficient credits there surface as provider "
-    "error code 2004); (3) search every configured platform with adequate quota - never a "
-    "single one - and expand the seed along the correlation chain domain -> IP -> ICP -> "
-    "icon hash -> TLS certificate fingerprint: derive sibling values from returned assets "
-    "(domains, IPs, ICP numbers, icon hashes, certificate subjects or fingerprints) and "
-    "query each derived value back on the other platforms using each platform's own query "
-    "syntax described in its search tool; (4) merge and de-duplicate assets across sources, "
-    "preferring narrow chained queries over broad ones, and never report a platform as "
-    "unavailable when its key is merely not configured - expose its setup guidance instead. "
     "Default to one bounded page per platform, at most 3 derived pivots and 100 total "
     "records. Do not fetch all pages, fan out recursively, or write a local script unless "
-    "the user explicitly requests exhaustive collection or export; use cursor or batch "
-    "tools only within an explicit user-supplied budget."
+    "explicitly requested; cursor/batch tools require a user budget. Aggregate record/pivot "
+    "budgets are client guidance; per-call page, CSV, and output limits are enforced."
+)
+
+_STARTUP_AND_SYNTAX_STATE_MACHINE = (
+    "Startup and syntax state machine: runtime credentials are a launch-time snapshot; "
+    "restart after environment changes. For configured platforms with unknown quota, "
+    "run user_info before a metered search; search sources with adequate quota. DayDayMap "
+    "has no user_info; error 2004 means insufficient credits. For missing_key, skip "
+    "search and user_info, show the required environment variable and record a coverage gap; "
+    "missing_key is a preflight state, not a provider failure. Translate every seed/pivot: "
+    "FOFA and ZoomEye use field=\"value\" with &&/||; Quake "
+    "uses field:\"value\" with AND/OR/NOT; Hunter and DayDayMap use field=\"value\" "
+    "with &&/||. On syntax errors, correct the destination grammar using its reference "
+    "or derive a supported sibling; do not label the platform unavailable. For ICP unit "
+    "names, use icp.name sources first, derive domain or ICP number, then use FOFA icp= "
+    "or Quake icp:; do not send an ICP "
+    "unit-name query to FOFA or Quake."
 )
 
 
@@ -102,11 +95,22 @@ def platform_runtime_guidance() -> str:
 
     def status(label: str, source: str | None, *, probe: str | None = None) -> str:
         if source:
-            suffix = f" (probe quota via {probe}) " if probe else " "
-            return f"{label}: configured in {source}{suffix}"
-        return f"{label}: not configured"
+            next_step = f"{probe} -> search" if probe else "search directly (no quota probe)"
+            return f"{label}: state=configured, credential_env={source}, next={next_step}"
+        required_env = {
+            "FOFA": "CN_FOFA_KEY",
+            "Quake": "CN_QUAKE_KEY",
+            "Hunter Personal": "CN_HUNTER_PERSONAL_KEY or CN_HUNTER_KEY",
+            "Hunter Enterprise": "CN_HUNTER_ENTERPRISE_KEY or CN_HUNTER_KEY",
+            "ZoomEye": "CN_ZOOMEYE_API_KEY",
+            "DayDayMap": "CN_DAYDAYMAP_API_KEY",
+        }[label]
+        return (
+            f"{label}: state=missing_key, required_env={required_env}, "
+            "next=skip search + setup guidance + coverage gap"
+        )
 
-    return "Runtime platform configuration: " + " | ".join(
+    return "Startup platform state machine: " + " | ".join(
         [
             status("FOFA", fofa, probe="fofa_user_info"),
             status("Quake", quake, probe="quake_user_info"),
@@ -172,6 +176,7 @@ def create_server() -> SurveyHubMCPServer:
             f"{_MVP_TARGET_DISCOVERY_INSTRUCTIONS} "
             f"{default_search_window_guidance()} "
             f"{_ASSET_PIVOT_INSTRUCTIONS} "
+            f"{_STARTUP_AND_SYNTAX_STATE_MACHINE} "
             f"{platform_runtime_guidance()} {hunter_runtime_guidance()}"
         ),
         version=__version__,

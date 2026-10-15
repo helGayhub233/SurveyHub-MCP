@@ -1,10 +1,10 @@
-> MCP 本地预算：搜索单页最多 1000 条（FOFA body 字段最多 500 条），Quake 聚合最多 1000 个桶。下文上游 API 上限不代表 MCP 可请求上限；按工具 schema 调用。
+> MCP 本地预算：搜索单页最多 1000 条；请求 body 时最多 500 条。公开 JSON 负载最多 64 KiB，长数据字符串保留前 4096 个字符并标记裁剪。上游 API 上限不代表 MCP 可请求上限；按 tools/list 的 Schema 调用。
 
 # FOFA API 文档
 
 来源：`https://fofa.info/api`
 
-抓取时间：2026-09-02
+抓取时间：2026-10-15
 
 ## 基础信息
 
@@ -25,10 +25,14 @@
 
 ### 本地 MCP 请求控制
 
-- `fofa_search_stats` 会在 MCP 进程内按 `5 秒/次` 排队调用，避免超过统计聚合接口限制。
-- `fofa_host` 会在 MCP 进程内按 `1 秒/次` 排队调用，避免超过 Host 聚合接口限制。
+- 同一凭证的全部 FOFA 工具（包含 `fofa_user_info`）共用账号级 `0.6 秒/次` 间隔（约 `1.67 次/秒`）。
+- `fofa_search_stats` 另外遵守端点级 `5 秒/次`；`fofa_host` 另外遵守端点级 `1 秒/次`。SQLite 在一个事务中协调账号和端点两个范围，顺序交替调用也不会绕过账号桶。
+- `fofa_search` 和 `fofa_search_next` 共用账号桶，默认字段统一为 `host,ip,port,domain,icp,icon_hash,cert`；下文参数表中的 `host,ip,port` 为上游默认值。
 - `fofa_search` 和 `fofa_search_next` 会校验字段相关的 `size` 限制：返回 `body` 时最大 `500`，返回 `cert` 或 `banner` 时最大 `2000`。
-- 该控制是单 MCP 进程内的内存节流；如果同时启动多个 MCP 进程，进程之间不会共享调用状态。
+- 相同凭证在同机、同用户且共用状态目录的 MCP 进程间共享节流；`SURVEYHUB_STATE_DIR` 可指定状态目录。多机或其他直接调用上游的客户端不在此协调范围内。
+- 搜索、Host 和 Stats 均启用计费请求账本和安全重试；HTTP 200 中的 `error=true` 会转换为 MCP 业务失败，不进入成功缓存。
+- `pagination.total` 读取上游搜索总量 `size`，`pagination.next_cursor` 原样保留 `next`，后续作为 `next_id` 入参。未知游标偏移不会被假设为 0；`full=true` 未获上游确认时不宣称完整。
+- `meta.output` / `next_action=refine_query` 表示本地裁剪，应缩小单页或字段；不能直接翻页跳过本页省略的记录。这里的 500/2000 是记录条数限制，不是 body/cert/banner 的字符串长度限制。
 
 ## 请求结构
 
@@ -52,7 +56,7 @@ GET /api/v1/search/all
 | `qbase64` | 是 | string | 查询语法的 Base64 编码结果 |
 | `fields` | 否 | string | 逗号分隔的返回字段，默认 `host,ip,port` |
 | `page` | 否 | int | 页码，默认第 1 页 |
-| `size` | 否 | int | 每页数量，默认 `100`，最大 `1000`（MCP 单次上限；上游文档上限可能更高） |
+| `size` | 否 | int | 每页数量，默认 `100`，最大 `1000`（MCP 单次上限；上游文档上限为 10,000 条/页） |
 | `full` | 否 | boolean | 默认查询一年内数据，`true` 查询全部数据 |
 | `r_type` | 否 | string | 指定为 `json` 时返回 JSON |
 
@@ -146,7 +150,7 @@ GET /api/v1/search/next
 | `key` | 是 | string | API Key |
 | `qbase64` | 是 | string | 查询语法的 Base64 编码结果 |
 | `fields` | 否 | string | 逗号分隔的返回字段，默认 `host,ip,port` |
-| `size` | 否 | int | 每页数量，默认 `100`，最大 `1000`（MCP 单次上限；上游文档上限可能更高） |
+| `size` | 否 | int | 每页数量，默认 `100`，最大 `1000`（MCP 单次上限；上游文档上限为 10,000 条/页） |
 | `next` | 否 | string | 上一次响应返回的翻页 ID；不传时返回第一页 |
 | `full` | 否 | boolean | 默认查询一年内数据，`true` 查询全部数据 |
 | `r_type` | 否 | string | 指定为 `json` 时返回 JSON |

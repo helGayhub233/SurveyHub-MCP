@@ -75,7 +75,9 @@ QUAKE_HOST_AGGREGATION_FIELDS = (
     "province_of_china"
 )
 
-QUAKE_RATE_LIMITER = AsyncRateLimiter(5.0)
+QUAKE_RATE_LIMITER = AsyncRateLimiter(
+    5.0, namespace="quake-account", identity_provider=lambda: _quake_key(),
+)
 
 
 def _quake_key() -> str | None:
@@ -288,6 +290,7 @@ async def search_quake_service(
         rate_limiter=QUAKE_RATE_LIMITER,
         retry_mode=retry_mode,
         metered_request=True,
+        retry_non_idempotent=True,
         force_retry=force_retry,
         headers=_headers(json=True),
         json=payload,
@@ -345,6 +348,7 @@ async def scroll_quake_service(
         rate_limiter=QUAKE_RATE_LIMITER,
         retry_mode=retry_mode,
         metered_request=True,
+        retry_non_idempotent=True,
         force_retry=force_retry,
         headers=_headers(json=True),
         json=payload,
@@ -426,6 +430,7 @@ async def aggregate_quake_service(
         rate_limiter=QUAKE_RATE_LIMITER,
         retry_mode=retry_mode,
         metered_request=True,
+        retry_non_idempotent=True,
         force_retry=force_retry,
         headers=_headers(json=True),
         json=payload,
@@ -520,6 +525,7 @@ async def search_quake_host(
         rate_limiter=QUAKE_RATE_LIMITER,
         retry_mode=retry_mode,
         metered_request=True,
+        retry_non_idempotent=True,
         force_retry=force_retry,
         headers=_headers(json=True),
         json=payload,
@@ -573,6 +579,7 @@ async def scroll_quake_host(
         rate_limiter=QUAKE_RATE_LIMITER,
         retry_mode=retry_mode,
         metered_request=True,
+        retry_non_idempotent=True,
         force_retry=force_retry,
         headers=_headers(json=True),
         json=payload,
@@ -652,6 +659,7 @@ async def aggregate_quake_host(
         rate_limiter=QUAKE_RATE_LIMITER,
         retry_mode=retry_mode,
         metered_request=True,
+        retry_non_idempotent=True,
         force_retry=force_retry,
         headers=_headers(json=True),
         json=payload,
@@ -696,6 +704,7 @@ async def aggregate_quake_similar_icon(
         rate_limiter=QUAKE_RATE_LIMITER,
         retry_mode=retry_mode,
         metered_request=True,
+        retry_non_idempotent=True,
         force_retry=force_retry,
         headers=_headers(json=True),
         json=payload,
@@ -757,7 +766,19 @@ def register_quake_tools(server: MCPServer) -> None:
         annotations=METERED_READ_ONLY_REMOTE_TOOL,
     )
     async def quake_service_search(
-        query: Annotated[str, Field(description='Quake query, for example service:http or port:443 AND country:"China".')],
+        query: Annotated[
+            str,
+            Field(
+                description=(
+                    "Native Quake query. Use field:\"value\" and AND/OR/NOT, never "
+                    "FOFA/ZoomEye style field=value with &&. For an ICP unit-name seed, "
+                    "first derive a supported node (domain or ICP number) from a source "
+                    "with icp.name, then query it here with domain: or icp:. "
+                    'Examples: service:"http", port:"443" AND country:"China", '
+                    'domain:"example.com", icp:"京ICP备00000000号-1".'
+                )
+            ),
+        ],
         start: Annotated[int, Field(ge=0, description="Result start offset.")] = 0,
         size: Annotated[int, Field(ge=1, le=500, description="Number of results to return.")] = 10,
         rule: Annotated[str | None, Field(description="Service data collection rule name for IP-list collections.")] = None,
@@ -803,7 +824,19 @@ def register_quake_tools(server: MCPServer) -> None:
         annotations=METERED_READ_ONLY_REMOTE_TOOL,
     )
     async def quake_service_scroll(
-        query: Annotated[str, Field(description='Quake query, for example service:http or port:443 AND country:"China".')],
+        query: Annotated[
+            str,
+            Field(
+                description=(
+                    "Native Quake query. Use field:\"value\" and AND/OR/NOT, never "
+                    "FOFA/ZoomEye style field=value with &&. For an ICP unit-name seed, "
+                    "first derive a supported node (domain or ICP number) from a source "
+                    "with icp.name, then query it here with domain: or icp:. "
+                    'Examples: service:"http", port:"443" AND country:"China", '
+                    'domain:"example.com", icp:"京ICP备00000000号-1".'
+                )
+            ),
+        ],
         size: Annotated[int, Field(ge=1, le=500, description="Results per page.")] = 100,
         pagination_id: Annotated[str | None, Field(description="Pagination ID from previous response. Expires in 5 minutes.")] = None,
         rule: Annotated[str | None, Field(description="Service data collection rule name for IP-list collections.")] = None,

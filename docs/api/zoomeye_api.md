@@ -1,13 +1,15 @@
-> MCP 本地预算：搜索单页最多 1000 条（FOFA body 字段最多 500 条），Quake 聚合最多 1000 个桶。下文上游 API 上限不代表 MCP 可请求上限；按工具 schema 调用。
+> MCP 本地预算：搜索单页最多 1000 条，公开 JSON 负载最多 64 KiB。下文上游 API 上限不代表 MCP 可请求上限；按 tools/list 的 Schema 调用。
+
+本地 userinfo 与搜索端点按相同凭证共享 `1 秒/次` 的 SQLite 防突发保护，限同机、同用户且共用状态目录的进程；该间隔不是上游官方速率声明。业务成功码为 `60000`，其他业务码转换为 MCP 失败。`query` 与 `qbase64` 必须恰好提供一个，编码输入须为非空 UTF-8 查询的标准 Base64，解码后的查询回显为 `meta.executed_query`。`meta.output` / `next_action=refine_query` 表示本地裁剪，应先缩小字段或单页大小。
 
 # ZoomEye API 文档
 
 来源：
 
-- `https://www.zoomeye.org/doc`（API v2 参考手册，页面更新时间 2024-12-04，2026-09-02 复核无变更）
+- `https://www.zoomeye.org/doc`（API v2 参考手册，页面更新时间 2024-12-04，2026-10-15 复核无变更）
 - 本地实现参考：`src/surveyhub_mcp/zoomeye.py`
 
-抓取时间：2026-09-02
+抓取时间：2026-10-15
 
 ## 基础信息
 
@@ -111,7 +113,7 @@ POST /v2/search
 | `fields` | string | 否 | `ip, port, domain, update_time` | 返回字段，多个字段用英文逗号分隔 |
 | `sub_type` | string | 否 | `v4` | 数据类型，支持 `v4`、`v6`、`web` |
 | `page` | integer | 否 | `1` | 页码，按更新时间排序 |
-| `pagesize` | integer | 否 | `10` | 每页数量；官方文档和当前 MCP schema 限制最大 `1000`（MCP 单次上限） |
+| `pagesize` | integer | 否 | `10` | 每页数量；当前 MCP schema 限制最大 `1000`（MCP 单次上限；上游文档上限为 10,000 条/页） |
 | `facets` | string | 否 | 无 | 聚合统计项，多个字段用英文逗号分隔 |
 | `ignore_cache` | boolean | 否 | `false` | 是否忽略缓存，商业版及以上支持 |
 

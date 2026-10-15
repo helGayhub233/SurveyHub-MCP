@@ -1,10 +1,16 @@
 > MCP 批量入口默认限制 CSV 5 MiB、100 行；会在发起远程任务前拒绝超预算文件。
 
+本地全部端点按相同凭证共享 SQLite 节流，间隔为 `1 秒/次`；两个 Hunter 版本使用同一 Key 时也共享账号桶，协调范围限同机、同用户且共用状态目录的进程。该间隔是本项目的本地保护值，不是上游官方速率声明：上游文档只按企业积分口径计费，未声明请求频率上限，HTTP/业务码 429 才是真实限速反馈。语法搜索及批次创建接入按凭证隔离的请求账本；批次创建遇到 HTTP/业务码 429 不自动重发，未知结果重复调用会被抑制，只有显式接受重复任务及扣费风险时使用 `force_retry=true`。
+
+上游业务成功码为 `200`；其他业务码转为 MCP 失败。结果数组 `data.arr` 纳入 `returned_count` 和规范化 `pagination`。公开 JSON 负载最多 64 KiB，长数据字符串保留前 4096 个字符并标记裁剪；`meta.output` / `next_action=refine_query` 表示应缩小字段或单页大小。
+
+MCP 下载工具额外接受 `overwrite=false`：目标已存在时在请求前拒绝，显式传 `overwrite=true` 才允许原子替换。写入失败保留旧文件；JSON 状态/错误响应不落为 CSV。下文为上游 API 参考，本地控制参数以上述说明及 `tools/list` 为准。
+
 # Hunter 企业版 API 文档
 
 来源：`https://hunter.qianxin.com/home/helpCenter`
 
-抓取时间：2026-09-02
+抓取时间：2026-10-15
 
 ## 基础信息
 
@@ -45,7 +51,7 @@ GET /openApi/search
 | `start_time` | 否 | 开始日期，格式 `YYYY-MM-DD` |
 | `end_time` | 否 | 结束日期，格式 `YYYY-MM-DD` |
 | `page` | 是 | 页码 |
-| `page_size` | 是 | 每页资产条数 |
+| `page_size` | 是 | 每页资产条数。MCP 单次上限为 `100`（`10`/`50`/`100` 枚举）；上游未声明该端点的公开上限 |
 | `is_web` | 否 | 资产类型：`1` Web 资产，`2` 非 Web 资产，`3` 全部 |
 | `status_code` | 否 | 状态码列表，逗号分隔，如 `200,401` |
 | `fields` | 否 | 返回字段列表，逗号分隔 |
@@ -57,7 +63,7 @@ ip, port, domain, ip_tag, url, web_title, is_risk_protocol, protocol,
 base_protocol, status_code, os, company, number, icp_exception, country,
 province, city, is_web, isp, as_org, cert_sha256, ssl_certificate,
 component, asset_tag, updated_at, header, header_server, banner,
-whois, body, vul_list
+whois, body, vul_list, ip_type, cname_target, mx_target
 ```
 
 ### 请求示例
@@ -89,7 +95,7 @@ search = base64.urlsafe_b64encode(query.encode("utf-8")).decode("ascii")
 | `data.rest_quota` | 今日剩余积分 |
 | `data.syntax_prompt` | 语法提示 |
 
-企业版资产结果可包含 `whois`, `body`, `vul_list`。
+企业版资产结果可包含 `whois`, `body`, `vul_list`, `ip_type`, `cname_target`, `mx_target`。
 
 ## 批量查询接口
 
@@ -293,6 +299,9 @@ curl -X GET -k "https://hunter.qianxin.com/openApi/userInfo?api-key={api-key}"
 | `whois` | Whois 数据 |
 | `body` | Body |
 | `vul_list` | 历史漏洞 |
+| `ip_type` | IP 版本 |
+| `cname_target` | CNAME 目标 |
+| `mx_target` | MX 目标 |
 | `consume_quota` | 消耗积分 |
 | `rest_quota` | 今日剩余积分 |
 | `account_type` | 账号类型 |

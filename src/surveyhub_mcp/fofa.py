@@ -45,9 +45,17 @@ FOFA_STATS_FIELDS = (
     "protocol, domain, port, title, os, server, country, asn, org, "
     "asset_type, fid, icp"
 )
-FOFA_STATS_RATE_LIMITER = AsyncRateLimiter(5.0)
-FOFA_HOST_RATE_LIMITER = AsyncRateLimiter(1.0)
-FOFA_SEARCH_RATE_LIMITER = AsyncRateLimiter(0.6)
+FOFA_SEARCH_RATE_LIMITER = AsyncRateLimiter(
+    0.6, namespace="fofa-account", identity_provider=lambda: _fofa_key(),
+)
+FOFA_STATS_RATE_LIMITER = AsyncRateLimiter(
+    5.0, namespace="fofa-stats", identity_provider=lambda: _fofa_key(),
+    shared_intervals={"fofa-account": 0.6},
+)
+FOFA_HOST_RATE_LIMITER = AsyncRateLimiter(
+    1.0, namespace="fofa-host", identity_provider=lambda: _fofa_key(),
+    shared_intervals={"fofa-account": 0.6},
+)
 
 
 def _fofa_key() -> str | None:
@@ -130,6 +138,8 @@ async def _request_fofa_search(
             "original_query": query,
             "executed_query": query,
             "partial_data": None,
+            "fields": split_csv(str(params.get("fields", ""))),
+            "range_verified": False if full else None,
             "execution": execution,
         },
         warnings=([{
@@ -217,7 +227,9 @@ async def search_fofa_next(
     )
 
 
-async def search_fofa_stats(*, query: str, fields: str = "protocol,domain,port") -> dict[str, Any]:
+async def search_fofa_stats(
+    *, query: str, fields: str = "protocol,domain,port", retry_mode: str = "safe_only", force_retry: bool = False,
+) -> dict[str, Any]:
     """Call FOFA statistics aggregation API."""
     if not _fofa_key():
         return _missing_key()
@@ -229,13 +241,18 @@ async def search_fofa_stats(*, query: str, fields: str = "protocol,domain,port")
         method="GET",
         url=f"{FOFA_BASE_URL}/api/v1/search/stats",
         rate_limiter=FOFA_STATS_RATE_LIMITER,
+        metered_request=True,
+        retry_mode=retry_mode,
+        force_retry=force_retry,
         params=params,
         auth_hint="Authentication failed. Check FOFA_KEY and FOFA_EMAIL if you use it.",
         forbidden_hint="Access forbidden. Your FOFA account may not have sufficient permissions.",
     )
 
 
-async def get_fofa_host(*, host: str, detail: bool = False) -> dict[str, Any]:
+async def get_fofa_host(
+    *, host: str, detail: bool = False, retry_mode: str = "safe_only", force_retry: bool = False,
+) -> dict[str, Any]:
     """Call FOFA host aggregation API."""
     if not _fofa_key():
         return _missing_key()
@@ -247,6 +264,9 @@ async def get_fofa_host(*, host: str, detail: bool = False) -> dict[str, Any]:
         method="GET",
         url=f"{FOFA_BASE_URL}/api/v1/host/{quote(host, safe='')}",
         rate_limiter=FOFA_HOST_RATE_LIMITER,
+        metered_request=True,
+        retry_mode=retry_mode,
+        force_retry=force_retry,
         params=params,
         auth_hint="Authentication failed. Check FOFA_KEY and FOFA_EMAIL if you use it.",
         forbidden_hint="Access forbidden. Your FOFA account may not have sufficient permissions.",
@@ -264,6 +284,7 @@ async def get_fofa_user_info() -> dict[str, Any]:
         platform="FOFA",
         method="GET",
         url=f"{FOFA_BASE_URL}/api/v1/info/my",
+        rate_limiter=FOFA_SEARCH_RATE_LIMITER,
         params=params,
         auth_hint="Authentication failed. Check FOFA_KEY and FOFA_EMAIL if you use it.",
         forbidden_hint="Access forbidden. Your FOFA account may not have sufficient permissions.",
@@ -336,7 +357,7 @@ def register_fofa_tools(server: MCPServer) -> None:
         query: Annotated[str, Field(description="FOFA query to encode as qbase64.")],
         size: Annotated[int, Field(ge=1, le=1000, description="Results per page, capped at 1000 to keep MCP responses bounded.")] = 100,
         next_id: Annotated[str | None, Field(description="Next page token returned by the previous response.")] = None,
-        fields: Annotated[str, Field(description="Comma-separated return fields.")] = "host,ip,port,domain,title",
+        fields: Annotated[str, Field(description="Comma-separated return fields.")] = FOFA_CORRELATION_FIELDS,
         full: Annotated[bool, Field(description="Set true to search all data instead of one-year data.")] = False,
         r_type: Annotated[str, Field(description='Response type. Use "json" for JSON responses.')] = "json",
         retry_mode: Annotated[str, Field(pattern="^(never|safe_only|aggressive)$", description="Retry policy. safe_only retries only failures known to occur before sending the request; aggressive may duplicate quota use.")] = "safe_only",
@@ -360,7 +381,8 @@ def register_fofa_tools(server: MCPServer) -> None:
             "Aggregate FOFA search results into counts for selected fields. Use "
             "fofa_search when individual asset records are required. This read-only "
             "request consumes FOFA quota and is throttled to one call every 5 seconds "
-            "in this MCP process."
+            "with shared account pacing across local MCP processes. safe_only avoids "
+            "uncertain replays; force_retry accepts possible duplicate quota use."
         ),
         annotations=METERED_READ_ONLY_REMOTE_TOOL,
     )
@@ -370,8 +392,10 @@ def register_fofa_tools(server: MCPServer) -> None:
             str,
             Field(description="Comma-separated aggregation fields, for example protocol,domain,port."),
         ] = "protocol,domain,port",
+        retry_mode: Annotated[str, Field(pattern="^(never|safe_only|aggressive)$", description="Retry policy; aggressive may duplicate quota use.")] = "safe_only",
+        force_retry: Annotated[bool, Field(description="Accept possible duplicate quota use when repeating a suppressed request.")] = False,
     ) -> StructuredToolResult:
-        return mcp_tool_result(await search_fofa_stats(query=query, fields=fields))
+        return mcp_tool_result(await search_fofa_stats(query=query, fields=fields, retry_mode=retry_mode, force_retry=force_retry))
 
     @server.tool(
         name="fofa_host",
@@ -379,15 +403,18 @@ def register_fofa_tools(server: MCPServer) -> None:
         description=(
             "Get FOFA aggregation data for one hostname or IP address. Use fofa_search "
             "for query-based discovery across multiple assets. This read-only request "
-            "consumes FOFA quota and is throttled to one call per second."
+            "consumes FOFA quota and is throttled to one call per second, with shared "
+            "account pacing across local processes. force_retry accepts duplicate quota risk."
         ),
         annotations=METERED_READ_ONLY_REMOTE_TOOL,
     )
     async def fofa_host(
         host: Annotated[str, Field(description="Host name or IP address, usually an IP.")],
         detail: Annotated[bool, Field(description="Set true to include port product details.")] = False,
+        retry_mode: Annotated[str, Field(pattern="^(never|safe_only|aggressive)$", description="Retry policy; aggressive may duplicate quota use.")] = "safe_only",
+        force_retry: Annotated[bool, Field(description="Accept possible duplicate quota use when repeating a suppressed request.")] = False,
     ) -> StructuredToolResult:
-        return mcp_tool_result(await get_fofa_host(host=host, detail=detail))
+        return mcp_tool_result(await get_fofa_host(host=host, detail=detail, retry_mode=retry_mode, force_retry=force_retry))
 
     @server.tool(
         name="fofa_user_info",
@@ -397,7 +424,8 @@ def register_fofa_tools(server: MCPServer) -> None:
             "membership details. Use this before fofa_search, fofa_search_next, or "
             "fofa_search_stats when authorization or capacity is uncertain; do not use "
             "it for asset discovery. This read-only operation requires configured FOFA "
-            "credentials, retrieves only account metadata, and performs no asset search."
+            "credentials, retrieves only account metadata, and performs no asset search. "
+            "It shares the account's local cross-process pacing of one call every 0.6 seconds."
         ),
         annotations=READ_ONLY_REMOTE_TOOL,
     )

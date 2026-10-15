@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+import binascii
 from typing import Annotated, Any, Literal
 
 from mcp.server import MCPServer
@@ -11,9 +13,11 @@ from . import __version__
 from .common import (
     METERED_READ_ONLY_REMOTE_TOOL,
     READ_ONLY_REMOTE_TOOL,
+    AsyncRateLimiter,
     StructuredToolResult,
     SurveyHubMCPServer,
     encode_base64,
+    enrich_payload,
     error_payload,
     mcp_tool_result,
     missing_env_message,
@@ -26,6 +30,9 @@ ZOOMEYE_BASE_URL = "https://api.zoomeye.org"
 ZOOMEYE_KEY_URL = "https://www.zoomeye.org -> Profile -> API Key"
 ZOOMEYE_DEFAULT_FIELDS = "ip,port,domain,url,hostname,ssl.jarm,ssl.ja3s,update_time"
 ZOOMEYE_FACETS = "country, subdivisions, city, product, service, device, os, port"
+ZOOMEYE_RATE_LIMITER = AsyncRateLimiter(
+    1.0, namespace="zoomeye-account", identity_provider=lambda: _zoomeye_key(),
+)
 
 
 def _zoomeye_key() -> str | None:
@@ -57,6 +64,7 @@ async def get_zoomeye_user_info() -> dict[str, Any]:
         platform="ZoomEye",
         method="POST",
         url=f"{ZOOMEYE_BASE_URL}/v2/userinfo",
+        rate_limiter=ZOOMEYE_RATE_LIMITER,
         headers=_headers(),
         auth_hint="Authentication failed. Check ZOOMEYE_API_KEY.",
         forbidden_hint="Access forbidden. Your ZoomEye paid account may not have sufficient permissions.",
@@ -80,14 +88,22 @@ async def search_zoomeye_assets(
     if not _zoomeye_key():
         return _missing_key()
 
-    if not qbase64:
-        if not query:
-            return error_payload(
-                platform="ZoomEye",
-                message="Either query or qbase64 is required.",
-                error_type="validation_error",
-            )
+    if (query is None) == (qbase64 is None):
+        return error_payload(
+            platform="ZoomEye", message="Provide exactly one of query or qbase64.", error_type="validation_error",
+        )
+    if qbase64 is None:
+        if not query or not query.strip():
+            return error_payload(platform="ZoomEye", message="query must not be empty.", error_type="validation_error")
         qbase64 = encode_base64(query)
+        executed_query = query
+    else:
+        try:
+            executed_query = base64.b64decode(qbase64, validate=True).decode("utf-8")
+        except (ValueError, binascii.Error, UnicodeDecodeError):
+            return error_payload(platform="ZoomEye", message="qbase64 must encode a UTF-8 query using standard Base64; alternatively provide query for automatic encoding.", error_type="validation_error")
+        if not executed_query.strip():
+            return error_payload(platform="ZoomEye", message="qbase64 must encode a non-empty query.", error_type="validation_error")
 
     payload: dict[str, object] = {
         "qbase64": qbase64,
@@ -100,10 +116,12 @@ async def search_zoomeye_assets(
     if facets:
         payload["facets"] = facets
 
-    return await request_json(
+    result = await request_json(
         platform="ZoomEye",
         method="POST",
         url=f"{ZOOMEYE_BASE_URL}/v2/search",
+        rate_limiter=ZOOMEYE_RATE_LIMITER,
+        retry_non_idempotent=True,
         headers=_headers(json=True),
         json=payload,
         retry_mode=retry_mode,
@@ -112,6 +130,7 @@ async def search_zoomeye_assets(
         auth_hint="Authentication failed. Check ZOOMEYE_API_KEY.",
         forbidden_hint="Access forbidden. This ZoomEye v2 endpoint requires sufficient paid account permissions and points.",
     )
+    return enrich_payload(result, meta={"original_query": query, "executed_query": executed_query})
 
 
 def register_zoomeye_tools(server: MCPServer) -> None:
@@ -125,7 +144,8 @@ def register_zoomeye_tools(server: MCPServer) -> None:
             "and remaining points. Use this before zoomeye_search when authorization or "
             "point capacity is uncertain; do not use it for asset discovery. This "
             "read-only operation requires a configured paid-account API key, retrieves "
-            "only account metadata, and performs no asset search."
+            "only account metadata, and performs no asset search. Local account pacing "
+            "is one call per second across processes sharing the state directory."
         ),
         annotations=READ_ONLY_REMOTE_TOOL,
     )
@@ -147,14 +167,24 @@ def register_zoomeye_tools(server: MCPServer) -> None:
             "point use. Each call returns one bounded page (maximum 1000 records); "
             "request later pages explicitly. Defaults include all-user hostname and "
             "SSL JARM/JA3S pivot fields; iconhash_md5 is available to request for "
-            "Professional+ accounts but is not enabled by default."
+            "Professional+ accounts but is not enabled by default. Local account pacing "
+            "is one call per second; this is an MCP safeguard, not an upstream rate guarantee."
         ),
         annotations=METERED_READ_ONLY_REMOTE_TOOL,
     )
     async def zoomeye_search(
         query: Annotated[
             str | None,
-            Field(description='Raw ZoomEye v2 query, for example title="knownsec" or port=443 && country="CN".'),
+            Field(
+                description=(
+                    "Native ZoomEye v2 query. Use field=\"value\" and &&/||, never "
+                    "Quake style field:\"value\" or AND/OR/NOT. For an ICP unit-name "
+                    "seed, query icp.name=\"单位名称\" directly. Examples: "
+                    'title="knownsec", port=443 && country="CN", '
+                    'domain="example.com", icp.number="京ICP备10040895号-40", '
+                    'after="2025-01-01" && icp.name="单位名称".'
+                )
+            ),
         ] = None,
         qbase64: Annotated[
             str | None,

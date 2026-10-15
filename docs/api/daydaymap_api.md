@@ -1,10 +1,12 @@
-> MCP 本地预算：搜索单页最多 1000 条（FOFA body 字段最多 500 条），Quake 聚合最多 1000 个桶。下文上游 API 上限不代表 MCP 可请求上限；按工具 schema 调用。
+> MCP 本地预算：搜索单页最多 1000 条，公开 JSON 负载最多 64 KiB。下文上游 API 上限不代表 MCP 可请求上限；按 tools/list 的 Schema 调用。
+
+本地按相同凭证共享 `1 秒/次` 的 SQLite 防突发保护，限同机、同用户且共用状态目录的进程；该间隔不是上游官方速率声明。业务状态码和恢复指引由公共响应层统一转换，查询回显为 `meta.original_query` / `meta.executed_query`。`meta.output` / `next_action=refine_query` 表示本地裁剪，应先缩小字段或单页大小，避免翻页时跳过本页省略的记录。
 
 # DayDayMap API 文档
 
 来源：`https://www.daydaymap.com/help/document`
 
-抓取时间：2026-09-02
+抓取时间：2026-10-15
 
 ## 基础信息
 
@@ -21,6 +23,7 @@
 - 搜索字符串须使用**英文双引号** `""`，不区分大小写。
 - API 语法检索消耗 `1 积分/次`；查看 IPv4 数据 `1 积分/条`，IPv6 数据 `3 积分/条`。
 - 积分优先扣除每日积分，每日积分为 0 后扣除权益积分。
+- 同一天内，查看/导出已看过的数据，只扣一次积分。
 
 ### 会员体系
 
@@ -40,6 +43,7 @@ POST https://www.daydaymap.com/api/v1/raymap/search/all
 ## 认证方式
 
 - 登录 DayDayMap 平台 → 右上角昵称 → 【个人中心】→【个人信息】→ 复制 API KEY。
+- API 权限：注册用户及以上。
 - API KEY 默认不过期，用户可在个人中心手动刷新。
 - API KEY 与用户身份绑定，每个用户独有；泄露后需及时刷新。
 

@@ -2,7 +2,28 @@
 
 All notable changes to SurveyHub-MCP will be documented in this file.
 
-## [Unreleased]
+## [1.21.0] - 2026-10-15
+
+### Changed
+
+- Compact repeated output-schema annotations while retaining self-contained validation constraints; expose the complete documented schema at `surveyhub://reference/response-schema` and shorten aggregate startup instructions.
+- Publish SEP-2549 freshness hints for discovery, catalogs, and static reference reads; keep credential-dependent tools/discovery private and allow per-method constructor overrides.
+- Reject unknown tool arguments instead of silently ignoring them, advertise `additionalProperties=false`, and provide the repository website in server metadata.
+- Upgrade the MCP Python SDK minimum to `2.3.0` and synchronize the lockfile and README version references.
+- Add Hunter Personal credentials to all MCP configuration examples, default the Enterprise credential to empty, and clarify account-specific variables in the environment template.
+- Normalize provider business failures into MCP errors before caching or publishing execution receipts; count Hunter `arr` records, recognize FOFA totals, and expose typed pagination controls without guessing cursor offsets or exact totals.
+- Bound each public tool payload to 64 KiB and large data strings to 4096 characters plus a truncation marker; distinguish local clipping with `meta.output`, `output_truncated`, and `next_action=refine_query`.
+- Partition request fingerprints by credential identity and uploaded file content. Protect FOFA Host/Stats and Hunter batch creation with the request ledger; never infer billed attempts from successful HTTP attempts.
+- Coordinate FOFA account and endpoint limits atomically across local processes; include account-info calls, share Quake limits, and add explicitly local one-second safeguards for ZoomEye and DayDayMap. Hunter editions share a bucket when their credential matches.
+- Unify FOFA search defaults, expose mutually exclusive query inputs in JSON Schema, validate ZoomEye Base64 inputs, and keep tool discovery ordering deterministic.
+- Make Hunter downloads refuse existing paths by default; `overwrite=true` explicitly permits an atomic replacement. JSON status/error responses do not create export files.
+
+### Fixed
+
+- Normalize SDK argument-validation failures, unknown tools, anticipated execution errors, and unexpected tool exceptions into `SurveyHubResponse` with matching text/structured output and stable error categories; preserve protocol errors and cancellation.
+- Omit the deprecated logging capability from modern discovery while preserving legacy `logging/setLevel`; filter modern logs using public request metadata instead of SDK-private log state.
+- Keep `safe_only` retries limited to confirmed pre-send failures; HTTP/business 429 retries require explicit aggressive mode and an operation that permits replay. Never retry non-idempotent batch creation on 429.
+- Do not cache confirmed business failures as successes or mark a timeout in the local request queue as a sent request. Missing business status, empty responses, and malformed JSON remain indeterminate and are protected from blind replay.
 
 ## [1.20.0] - 2026-09-11
 
