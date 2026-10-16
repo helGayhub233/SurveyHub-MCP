@@ -3,7 +3,7 @@
 <p align="center">聚合 FOFA、Quake、Hunter、ZoomEye 与 DayDayMap 的空间测绘 MCP Server</p>
 
 <p align="center">
-  <img src="https://badgen.net/pypi/v/surveyhub-mcp?label=PyPI&color=3775A9&cache=300&version=1.21.0" alt="PyPI v1.21.0"/>
+  <img src="https://badgen.net/pypi/v/surveyhub-mcp?label=PyPI&color=3775A9&cache=300&version=1.21.1" alt="PyPI v1.21.1"/>
   <img src="https://badgen.net/badge/Python/%3E%3D3.10/3776AB" alt="Python >=3.10"/>
   <img src="https://badgen.net/badge/MCP%20SDK/2.3.0/6F42C1" alt="MCP SDK 2.3.0"/>
   <img src="https://badgen.net/pypi/dm/surveyhub-mcp?label=Downloads&color=2EA44F&cache=86400" alt="PyPI 下载量"/>
@@ -53,7 +53,7 @@ MCP 客户端配置：
         "CN_QUAKE_KEY": "your_quake_key",
         "CN_ZOOMEYE_API_KEY": "your_zoomeye_api_key",
         "CN_HUNTER_PERSONAL_KEY": "your_hunter_personal_key",
-        "CN_HUNTER_ENTERPRISE_KEY": "",
+        "CN_HUNTER_ENTERPRISE_KEY": "your_hunter_enterprise_key",
         "CN_DAYDAYMAP_API_KEY": "your_daydaymap_api_key"
       }
     }
@@ -90,7 +90,7 @@ daydaymap-mcp
         "CN_QUAKE_KEY": "your_quake_key",
         "CN_ZOOMEYE_API_KEY": "your_zoomeye_api_key",
         "CN_HUNTER_PERSONAL_KEY": "your_hunter_personal_key",
-        "CN_HUNTER_ENTERPRISE_KEY": "",
+        "CN_HUNTER_ENTERPRISE_KEY": "your_hunter_enterprise_key",
         "CN_DAYDAYMAP_API_KEY": "your_daydaymap_api_key"
       }
     }
@@ -154,7 +154,7 @@ uv run daydaymap-mcp
         "CN_QUAKE_KEY": "your_quake_key",
         "CN_ZOOMEYE_API_KEY": "your_zoomeye_api_key",
         "CN_HUNTER_PERSONAL_KEY": "your_hunter_personal_key",
-        "CN_HUNTER_ENTERPRISE_KEY": "",
+        "CN_HUNTER_ENTERPRISE_KEY": "your_hunter_enterprise_key",
         "CN_DAYDAYMAP_API_KEY": "your_daydaymap_api_key"
       }
     }
@@ -175,7 +175,7 @@ uv run daydaymap-mcp
 
 `mcp.json.example` 和 `.env.example` 提供了可直接修改的示例。
 
-示例默认面向 Hunter 个人版：将 `CN_HUNTER_PERSONAL_KEY` 替换为普通用户的 API Key，企业版变量保持为空。企业用户将个人版变量留空，改填 `CN_HUNTER_ENTERPRISE_KEY`；未使用的平台变量应留空或删除。
+示例同时给出 Hunter 个人版与企业版占位符：按账号类型将对应变量替换为真实 Key，另一个留空或删除（同时配置两个版本会使两组 Hunter 工具同时暴露）；未使用的平台变量同样建议留空或删除。
 
 ### Hunter 版本路由
 
@@ -317,7 +317,7 @@ Hunter 下载默认 `overwrite=false`，目标已存在时在请求前返回 `fi
 | FOFA | `fofa_search`, `fofa_search_next` | 不使用未文档化响应字段控制重试；`full=true` 且供应商未明确确认时，返回 `completeness.state=unknown` |
 | Quake | 全部工具 | 同一凭证共享 SQLite 节流，`5 秒/次` |
 | Quake | `quake_service_search`, `quake_service_scroll`, `quake_host_search`, `quake_host_scroll` | 参数 schema 限制，`size <= 500` |
-| Quake | `quake_service_search`, `quake_service_scroll`, `quake_host_search`, `quake_host_scroll` | 根据官方可筛选字段清单移除非法 `include/exclude` 字段并返回 warning（服务与主机数据分别按 `/filterable/field/quake_service` 与 `/quake_host` 清单校验） |
+| Quake | `quake_service_search`, `quake_service_scroll`, `quake_host_search`, `quake_host_scroll` | 按账号在 `/filterable/field/quake_service` 与 `/quake_host` 接口返回的实际可筛选字段移除非法 `include/exclude` 字段并返回 warning；字段清单按小时缓存，接口不可用时回退内置字段表 |
 | Quake | 搜索与聚合工具 | 默认 `safe_only` 仅重试确认未发送的失败；读/写超时不自动重发，`aggressive` 模式的多次 HTTP 尝试会返回可能重复消耗配额的 warning |
 | Quake | `quake_service_aggregation`, `quake_host_aggregation` | 本地校验聚合字段最多 2 个，参数 schema 限制 `size <= 1000` |
 | Quake | `quake_similar_icon` | 参数 schema 限制：`favicon_hash` 必须为 32 位 MD5，`similar` 范围 `0-1`，`size <= 50` |
@@ -364,6 +364,8 @@ src/
     hunter_enterprise.py  # Hunter 企业版工具
     daydaymap.py          # DayDayMap 工具
     reference.py          # MCP resources 和 prompts
+    contracts.py          # 供应商响应契约与业务状态判定
+    output_budget.py      # 输出预算、截断与分页裁剪
     common.py             # 共享编码、HTTP、错误处理和节流工具
 glama.json                # Glama 注册表维护者声明
 ```

@@ -2,6 +2,13 @@
 
 All notable changes to SurveyHub-MCP will be documented in this file.
 
+## [1.21.1] - 2026-10-16
+
+### Fixed
+
+- Fetch Quake `include`/`exclude` fields from the account-scoped filterable-fields endpoints (one-hour cache, built-in lists as fallback) so fields the account cannot filter on are dropped locally with a warning instead of failing the whole request with provider error `q2001`.
+- Recognize Quake string business codes such as `q2001` in provider error normalization: `q2001` maps to `validation_error` with the provider message preserved, and string codes are no longer written into `status_code`.
+
 ## [1.21.0] - 2026-10-15
 
 ### Changed
