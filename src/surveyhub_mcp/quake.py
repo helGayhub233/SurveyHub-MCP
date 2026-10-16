@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import time
 from typing import Annotated, Any
 
 from mcp.server import MCPServer
@@ -110,6 +111,54 @@ def _put_csv(payload: dict[str, object], key: str, value: str | None) -> None:
         payload[key] = items
 
 
+_ACCEPTED_FIELDS_CACHE: dict[str, tuple[float, frozenset[str]]] = {}
+_ACCEPTED_FIELDS_TTL_SECONDS = 3600.0
+
+
+def _extract_field_names(result: dict[str, Any]) -> frozenset[str] | None:
+    """Pull the accepted field names out of a filterable-fields payload."""
+    if not result.get("ok"):
+        return None
+    body = result.get("data")
+    data = body.get("data") if isinstance(body, dict) else None
+    if not isinstance(data, list):
+        return None
+    names = {item for item in data if isinstance(item, str) and item}
+    return frozenset(names) or None
+
+
+async def _accepted_filterable_fields(kind: str, fallback: frozenset[str]) -> frozenset[str]:
+    """Return the fields the account may actually pass to include/exclude.
+
+    The built-in lists mirror the public documentation, but the service
+    enforces an account-scoped subset (the configured basic account currently
+    accepts 13 service fields and 6 host fields). Filtering against the stale
+    list sends rejected fields, and the provider then fails the whole request
+    with a string error code. Fetch the live list once per hour and fall back
+    to the built-in list when the lookup fails.
+    """
+    cached = _ACCEPTED_FIELDS_CACHE.get(kind)
+    now = time.monotonic()
+    if cached is not None and now - cached[0] < _ACCEPTED_FIELDS_TTL_SECONDS:
+        return cached[1]
+    if not _quake_key():
+        return fallback
+    result = await request_json(
+        platform="Quake",
+        method="GET",
+        url=f"{QUAKE_BASE_URL}/api/v3/filterable/field/{kind}",
+        rate_limiter=QUAKE_RATE_LIMITER,
+        headers=_headers(),
+        auth_hint="Authentication failed. Check QUAKE_KEY.",
+        forbidden_hint="Access forbidden. Your Quake account may not have sufficient permissions.",
+    )
+    fields = _extract_field_names(result)
+    if fields:
+        _ACCEPTED_FIELDS_CACHE[kind] = (now, fields)
+        return fields
+    return fallback
+
+
 def _filter_fields(
     value: str | None, *, parameter: str, accepted: frozenset[str], source: str
 ) -> tuple[str | None, dict[str, Any] | None]:
@@ -132,34 +181,36 @@ def _filter_fields(
     return (",".join(kept) or None), warning
 
 
-def _prepare_service_fields(include: str | None, exclude: str | None) -> tuple[str | None, str | None, list[dict[str, Any]]]:
+async def _prepare_service_fields(include: str | None, exclude: str | None) -> tuple[str | None, str | None, list[dict[str, Any]]]:
+    accepted = await _accepted_filterable_fields("quake_service", QUAKE_FILTERABLE_FIELD_SET)
     prepared_include, include_warning = _filter_fields(
         include,
         parameter="include",
-        accepted=QUAKE_FILTERABLE_FIELD_SET,
+        accepted=accepted,
         source="/api/v3/filterable/field/quake_service",
     )
     prepared_exclude, exclude_warning = _filter_fields(
         exclude,
         parameter="exclude",
-        accepted=QUAKE_FILTERABLE_FIELD_SET,
+        accepted=accepted,
         source="/api/v3/filterable/field/quake_service",
     )
     warnings = [warning for warning in (include_warning, exclude_warning) if warning]
     return prepared_include, prepared_exclude, warnings
 
 
-def _prepare_host_fields(include: str | None, exclude: str | None) -> tuple[str | None, str | None, list[dict[str, Any]]]:
+async def _prepare_host_fields(include: str | None, exclude: str | None) -> tuple[str | None, str | None, list[dict[str, Any]]]:
+    accepted = await _accepted_filterable_fields("quake_host", QUAKE_HOST_FILTERABLE_FIELD_SET)
     prepared_include, include_warning = _filter_fields(
         include,
         parameter="include",
-        accepted=QUAKE_HOST_FILTERABLE_FIELD_SET,
+        accepted=accepted,
         source="/api/v3/filterable/field/quake_host",
     )
     prepared_exclude, exclude_warning = _filter_fields(
         exclude,
         parameter="exclude",
-        accepted=QUAKE_HOST_FILTERABLE_FIELD_SET,
+        accepted=accepted,
         source="/api/v3/filterable/field/quake_host",
     )
     warnings = [warning for warning in (include_warning, exclude_warning) if warning]
@@ -267,7 +318,7 @@ async def search_quake_service(
     if not _quake_key():
         return _missing_key()
 
-    include, exclude, warnings = _prepare_service_fields(include, exclude)
+    include, exclude, warnings = await _prepare_service_fields(include, exclude)
     payload = _service_payload(
         query=query,
         start=start,
@@ -325,7 +376,7 @@ async def scroll_quake_service(
     if not _quake_key():
         return _missing_key()
 
-    include, exclude, warnings = _prepare_service_fields(include, exclude)
+    include, exclude, warnings = await _prepare_service_fields(include, exclude)
     payload = _service_payload(
         query=query,
         size=size,
@@ -504,7 +555,7 @@ async def search_quake_host(
     if not _quake_key():
         return _missing_key()
 
-    include, exclude, warnings = _prepare_host_fields(include, exclude)
+    include, exclude, warnings = await _prepare_host_fields(include, exclude)
     payload = _host_payload(
         query=query,
         start=start,
@@ -558,7 +609,7 @@ async def scroll_quake_host(
     if not _quake_key():
         return _missing_key()
 
-    include, exclude, warnings = _prepare_host_fields(include, exclude)
+    include, exclude, warnings = await _prepare_host_fields(include, exclude)
     payload = _host_payload(
         query=query,
         size=size,

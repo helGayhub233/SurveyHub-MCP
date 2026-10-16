@@ -20,6 +20,15 @@ DAYDAYMAP_ERRORS = {
     2005: ("pagination_limit", "Narrow the query; only the first 10,000 results are accessible."),
     2006: ("provider_error", "Check provider status before retrying the request."),
 }
+QUAKE_STRING_ERRORS = {
+    # Observed live: {"code":"q2001","message":"筛选字段传参错误: [...],
+    # 请调用可筛选字段接口查看可筛选字段"} when include/exclude carry
+    # fields the account is not allowed to filter on.
+    "q2001": (
+        "validation_error",
+        "Correct include/exclude fields using the Quake filterable-fields reference.",
+    ),
+}
 
 
 def integer_code(value: Any) -> int | None:
@@ -31,11 +40,31 @@ def integer_code(value: Any) -> int | None:
     return None
 
 
+def business_code(value: Any) -> int | str | None:
+    """Accept documented numeric codes plus provider string status codes.
+
+    Quake reports some business errors with string codes such as "q2001"
+    (rejected include/exclude fields). Treating those as a missing status
+    turned a clear provider error into invalid_response and dropped the real
+    error message.
+    """
+    if type(value) is int:
+        return value
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        if stripped.lstrip("-").isdigit():
+            return int(stripped)
+        return stripped
+    return None
+
+
 def provider_error(platform: str, body: Any) -> dict[str, Any] | None:
     """Recognize only documented provider error flags/codes, not arbitrary data."""
     if platform != "FOFA" and platform not in SUCCESS_CODES:
         return None
-    code = integer_code(body.get("code")) if isinstance(body, dict) else None
+    code = business_code(body.get("code")) if isinstance(body, dict) else None
     invalid = not isinstance(body, dict) or (
         type(body.get("error")) is not bool if platform == "FOFA" else code is None
     )
@@ -60,13 +89,17 @@ def provider_error(platform: str, body: Any) -> dict[str, Any] | None:
     }.get(code, ("provider_error", "Consult the platform API reference and correct the reported error before retrying."))
     if platform == "DayDayMap":
         error_type, guidance = DAYDAYMAP_ERRORS.get(code, (error_type, guidance))
+    elif platform == "Quake" and isinstance(code, str):
+        error_type, guidance = QUAKE_STRING_ERRORS.get(code, (error_type, guidance))
     result: dict[str, Any] = {
         "type": error_type,
         "message": f"{platform}: {message} {guidance}",
         "details": {"provider_message": message, "guidance": guidance},
     }
-    if code is not None:
+    if isinstance(code, int):
         result["status_code"] = code
+        result["details"]["provider_code"] = code
+    elif code is not None:
         result["details"]["provider_code"] = code
     return result
 
